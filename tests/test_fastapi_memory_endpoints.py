@@ -14,6 +14,7 @@ from servers.fastapi_server import (
     recall_memories_endpoint,
     save_memories_endpoint,
 )
+from services.memory_store_service import close_connection
 
 
 class FastApiMemoryEndpointTests(unittest.IsolatedAsyncioTestCase):
@@ -27,6 +28,7 @@ class FastApiMemoryEndpointTests(unittest.IsolatedAsyncioTestCase):
         }
 
     def tearDown(self) -> None:
+        close_connection(Path(self.config["memory_db_path"]))
         self._tmpdir.cleanup()
 
     async def test_save_memories_endpoint(self) -> None:

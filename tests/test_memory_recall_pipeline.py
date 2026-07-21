@@ -6,6 +6,7 @@ from pathlib import Path
 
 from pipelines.memory_recall import memory_recall_run
 from services.memory_service import MemoryInput, save_memories
+from services.memory_store_service import close_connection
 
 
 class MemoryRecallPipelineTests(unittest.TestCase):
@@ -19,6 +20,7 @@ class MemoryRecallPipelineTests(unittest.TestCase):
         }
 
     def tearDown(self) -> None:
+        close_connection(Path(self.config["memory_db_path"]))
         self._tmpdir.cleanup()
 
     def test_pipeline_trims_to_token_budget(self) -> None:

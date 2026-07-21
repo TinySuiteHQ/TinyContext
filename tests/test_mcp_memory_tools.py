@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from servers.mcp_server import recall_memories_tool, save_memories_tool
+from services.memory_store_service import close_connection
 
 
 def _fn(coro):
@@ -23,6 +24,7 @@ class McpMemoryToolTests(unittest.IsolatedAsyncioTestCase):
         }
 
     def tearDown(self) -> None:
+        close_connection(Path(self.config["memory_db_path"]))
         self._tmpdir.cleanup()
 
     async def test_save_memories_tool(self) -> None:

@@ -14,6 +14,7 @@ from servers.fastapi_server import (
 )
 from servers.mcp_server import recall_memories_tool, save_memories_tool
 from services.memory_service import MemoryInput, save_memories
+from services.memory_store_service import close_connection
 
 
 def _fn(coro):
@@ -31,6 +32,7 @@ class MemoryFastApiMcpParityTests(unittest.IsolatedAsyncioTestCase):
         }
 
     def tearDown(self) -> None:
+        close_connection(Path(self.config["memory_db_path"]))
         self._tmpdir.cleanup()
 
     async def test_save_memories_parity(self) -> None:
