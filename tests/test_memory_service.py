@@ -11,6 +11,7 @@ from services.memory_service import (
     recall_memories,
     save_memories,
 )
+from services.memory_store_service import close_connection
 
 
 class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -24,6 +25,7 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
         }
 
     def tearDown(self) -> None:
+        close_connection(Path(self.config["memory_db_path"]))
         self._tmpdir.cleanup()
 
     def test_save_memories_persists_rows(self) -> None:

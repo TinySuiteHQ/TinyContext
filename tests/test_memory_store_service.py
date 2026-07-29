@@ -6,6 +6,7 @@ from pathlib import Path
 
 from services.memory_store_service import (
     MemoryRow,
+    close_connection,
     fetch_candidates,
     insert_memories,
     session_exists,
@@ -18,6 +19,7 @@ class MemoryStoreServiceTests(unittest.TestCase):
         self.db_path = Path(self._tmpdir.name) / "memories.db"
 
     def tearDown(self) -> None:
+        close_connection(self.db_path)
         self._tmpdir.cleanup()
 
     def test_insert_and_fetch_candidates(self) -> None:
