@@ -63,13 +63,12 @@ uvx --python 3.12 --from "tinysuite-context[server]" tinycontext doctor
 TinyContext exposes two tools:
 
 ```text
-save_memories(memories, session_id?)
-recall_memories(query, session_id?, max_tokens?, top_k?)
+save_memories(memories)
+recall_memories(query)
 ```
 
 - Use `save_memories` for durable facts, preferences, decisions, and research notes.
 - Use `recall_memories` before answering when previous context may help.
-- Keep `max_tokens` small enough that recalled memory earns its place in the prompt.
 
 ## Python library
 

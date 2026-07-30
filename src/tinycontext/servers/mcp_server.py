@@ -148,8 +148,8 @@ async def _run_streamable_http_combined_async() -> None:
 MCP_INSTRUCTIONS = """
 This MCP server exposes two tools:
 
-1. save_memories(memories, session_id?)
-2. recall_memories(query, session_id?, max_tokens?, top_k?)
+1. save_memories(memories)
+2. recall_memories(query)
 
 Use save_memories to persist short, durable facts, preferences, or session notes
 for later retrieval. Each memory should be concise and self-contained.
@@ -212,18 +212,13 @@ async def save_memories_tool(
             )
         ),
     ],
-    session_id: Annotated[
-        str | None,
-        Field(description="Optional session scope for isolating memories."),
-    ] = None,
 ) -> dict[str, Any]:
     started = time.monotonic()
-    _log(f"save_memories called count={len(memories)} session_id={session_id!r}")
+    _log(f"save_memories called count={len(memories)}")
     config = load_context_config()
     try:
         payload = core.save_memories(
             _normalize_memory_items(memories),
-            session_id=session_id,
             config=config,
         )
     except MemoryError as exc:
@@ -249,31 +244,13 @@ async def recall_memories_tool(
         str,
         Field(description="Question or task description to match against memories."),
     ],
-    session_id: Annotated[
-        str | None,
-        Field(description="Optional session scope to filter memories."),
-    ] = None,
-    max_tokens: Annotated[
-        int | None,
-        Field(description="Maximum total tokens to return."),
-    ] = None,
-    top_k: Annotated[
-        int | None,
-        Field(description="Maximum number of memories to consider."),
-    ] = None,
 ) -> dict[str, Any]:
     started = time.monotonic()
-    _log(
-        "recall_memories called "
-        f"query={query!r} session_id={session_id!r} max_tokens={max_tokens} top_k={top_k}"
-    )
+    _log(f"recall_memories called query={query!r}")
     config = load_context_config()
     try:
         payload = core.recall_memories(
             query,
-            session_id=session_id,
-            max_tokens=max_tokens,
-            top_k=top_k,
             config=config,
         )
     except MemoryError as exc:

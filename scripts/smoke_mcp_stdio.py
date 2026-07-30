@@ -14,6 +14,10 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 
 
 EXPECTED_TOOLS = {"save_memories", "recall_memories"}
+EXPECTED_PARAMETERS = {
+    "save_memories": {"memories"},
+    "recall_memories": {"query"},
+}
 
 
 async def smoke() -> None:
@@ -46,6 +50,17 @@ async def smoke() -> None:
                         raise RuntimeError(
                             f"unexpected MCP tools: {sorted(names)}; "
                             f"expected {sorted(EXPECTED_TOOLS)}"
+                        )
+                    parameters = {
+                        tool.name: set(
+                            tool.inputSchema.get("properties", {})
+                        )
+                        for tool in response.tools
+                    }
+                    if parameters != EXPECTED_PARAMETERS:
+                        raise RuntimeError(
+                            f"unexpected MCP parameters: {parameters}; "
+                            f"expected {EXPECTED_PARAMETERS}"
                         )
 
 

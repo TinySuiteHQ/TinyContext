@@ -45,7 +45,6 @@ class MemoryFastApiMcpParityTests(unittest.IsolatedAsyncioTestCase):
         ):
             fastapi_payload = await save_memories_endpoint(
                 SaveMemoriesRequest(
-                    session_id="parity",
                     memories=[MemoryInputModel(**memories[0])],
                 )
             )
@@ -53,7 +52,7 @@ class MemoryFastApiMcpParityTests(unittest.IsolatedAsyncioTestCase):
             "tinycontext.servers.mcp_server.load_context_config",
             return_value=self.config,
         ):
-            mcp_payload = await _fn(save_memories_tool)(memories, session_id="parity")
+            mcp_payload = await _fn(save_memories_tool)(memories)
         self.assertEqual(
             {item["session_id"] for item in fastapi_payload["saved"]},
             {item["session_id"] for item in mcp_payload["saved"]},
@@ -63,7 +62,6 @@ class MemoryFastApiMcpParityTests(unittest.IsolatedAsyncioTestCase):
     async def test_recall_memories_parity(self) -> None:
         save_memories(
             [MemoryInput(content="memory about sqlite storage")],
-            session_id="parity",
             config=self.config,
         )
         with patch(
@@ -71,16 +69,13 @@ class MemoryFastApiMcpParityTests(unittest.IsolatedAsyncioTestCase):
             return_value=self.config,
         ):
             fastapi_payload = await recall_memories_endpoint(
-                RecallMemoriesRequest(query="sqlite", session_id="parity")
+                RecallMemoriesRequest(query="sqlite")
             )
         with patch(
             "tinycontext.servers.mcp_server.load_context_config",
             return_value=self.config,
         ):
-            mcp_payload = await _fn(recall_memories_tool)(
-                "sqlite",
-                session_id="parity",
-            )
+            mcp_payload = await _fn(recall_memories_tool)("sqlite")
         self.assertEqual(fastapi_payload["query"], mcp_payload["query"])
         self.assertEqual(
             fastapi_payload["total_tokens"],
