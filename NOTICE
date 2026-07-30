@@ -1,0 +1,8 @@
+TinyContext
+Copyright (c) 2026 TinyContext contributors
+
+TinyContext source code is licensed under the MIT License. See LICENSE.
+
+The Python package and Docker image install third-party dependencies. Those
+packages and their transitive dependencies remain under their respective
+upstream licenses.

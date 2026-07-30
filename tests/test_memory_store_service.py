@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from services.memory_store_service import (
-    MemoryRow,
+from tinycontext.models import MemoryRow
+from tinycontext.services.memory_store_service import (
     close_connection,
     fetch_candidates,
     insert_memories,

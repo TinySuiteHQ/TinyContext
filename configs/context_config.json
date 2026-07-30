@@ -1,5 +1,5 @@
 {
-  "memory_db_path": "data/memories.db",
+  "memory_db_path": "../data/memories.db",
   "recall_top_k": 10,
   "recall_max_tokens": 2000,
   "encoding_name": "o200k_base"

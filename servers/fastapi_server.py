@@ -1,140 +1,14 @@
+"""Thin wrapper preserving `uvicorn servers.fastapi_server:app`."""
+
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
-from typing import Any
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
+_SRC_ROOT = Path(__file__).resolve().parent.parent / "src"
+if str(_SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SRC_ROOT))
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from tinycontext.servers.fastapi_server import app
 
-from services.context_config_service import load_context_config
-from services.memory_service import (
-    MEMORY_ERROR_MAP,
-    EmptyMemoryError,
-    MemoryError,
-    MemoryInput,
-    recall_memories,
-    save_memories,
-)
-
-
-def _tinycontext_version() -> str:
-    return os.environ.get("TINYCONTEXT_VERSION", "dev").strip() or "dev"
-
-
-app = FastAPI(
-    title="TinyContext API",
-    description="Token-light memory save and recall endpoints for agents.",
-    version=_tinycontext_version(),
-)
-
-
-class MemoryInputModel(BaseModel):
-    content: str = Field(..., min_length=1)
-    tags: list[str] | None = None
-    metadata: dict[str, Any] | None = None
-
-
-class SaveMemoriesRequest(BaseModel):
-    session_id: str | None = None
-    memories: list[MemoryInputModel] = Field(..., min_length=1)
-
-
-class RecallMemoriesRequest(BaseModel):
-    query: str = Field(..., min_length=1)
-    session_id: str | None = None
-    max_tokens: int | None = Field(default=None, ge=1)
-    top_k: int | None = Field(default=None, ge=1)
-
-
-def _raise_memory_http_error(exc: Exception) -> None:
-    mapping = MEMORY_ERROR_MAP.get(type(exc))
-    if mapping is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"code": "internal_error", "message": "internal error"},
-        ) from exc
-    code, status_code = mapping
-    raise HTTPException(
-        status_code=status_code,
-        detail={"code": code, "message": str(exc)},
-    ) from exc
-
-
-def _to_memory_inputs(items: list[MemoryInputModel]) -> list[MemoryInput]:
-    return [
-        MemoryInput(
-            content=item.content,
-            tags=item.tags,
-            metadata=item.metadata,
-        )
-        for item in items
-    ]
-
-
-@app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
-
-
-@app.post("/save_memories")
-async def save_memories_endpoint(request: SaveMemoriesRequest) -> dict[str, Any]:
-    config = load_context_config()
-    try:
-        return save_memories(
-            _to_memory_inputs(request.memories),
-            session_id=request.session_id,
-            config=config,
-        )
-    except MemoryError as exc:
-        _raise_memory_http_error(exc)
-
-
-@app.get("/save_memories")
-async def save_memories_get(
-    content: str,
-    session_id: str | None = None,
-) -> dict[str, Any]:
-    return await save_memories_endpoint(
-        SaveMemoriesRequest(
-            session_id=session_id,
-            memories=[MemoryInputModel(content=content)],
-        )
-    )
-
-
-@app.post("/recall_memories")
-async def recall_memories_endpoint(request: RecallMemoriesRequest) -> dict[str, Any]:
-    config = load_context_config()
-    try:
-        return recall_memories(
-            request.query,
-            session_id=request.session_id,
-            max_tokens=request.max_tokens,
-            top_k=request.top_k,
-            config=config,
-        )
-    except MemoryError as exc:
-        _raise_memory_http_error(exc)
-
-
-@app.get("/recall_memories")
-async def recall_memories_get(
-    query: str,
-    session_id: str | None = None,
-    max_tokens: int | None = None,
-    top_k: int | None = None,
-) -> dict[str, Any]:
-    return await recall_memories_endpoint(
-        RecallMemoriesRequest(
-            query=query,
-            session_id=session_id,
-            max_tokens=max_tokens,
-            top_k=top_k,
-        )
-    )
+__all__ = ["app"]

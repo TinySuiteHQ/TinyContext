@@ -1,12 +1,13 @@
-FROM python:3.12-slim AS runtime-base
+FROM python:3.12-slim
 
 ARG TINYCONTEXT_VERSION=dev
 
 LABEL org.opencontainers.image.title="TinyContext" \
       org.opencontainers.image.description="Token-light memory save and recall for local agents" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.source="https://github.com/MarcellM01/TinyContext" \
-      org.opencontainers.image.version="${TINYCONTEXT_VERSION}"
+      org.opencontainers.image.source="https://github.com/TinySuiteHQ/TinyContext" \
+      org.opencontainers.image.version="${TINYCONTEXT_VERSION}" \
+      io.modelcontextprotocol.server.name="io.github.TinySuiteHQ/tinycontext"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -17,34 +18,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && apt-get install -y --no-install-recommends ca-certificates curl gosu \
     && rm -rf /var/lib/apt/lists/*
-
-COPY requirements.txt .
-RUN pip install --upgrade pip \
-    && pip install -r requirements.txt
 
 COPY . .
 
-RUN useradd --create-home --shell /usr/sbin/nologin tinycontext \
+RUN pip install --upgrade pip \
+    && pip install ".[server]" \
+    && useradd --create-home --shell /usr/sbin/nologin tinycontext \
     && mkdir -p /data \
-    && chown -R tinycontext:tinycontext /data
-
-USER tinycontext
-
-FROM runtime-base AS fastapi
-
-LABEL org.opencontainers.image.title="TinyContext FastAPI" \
-      org.opencontainers.image.description="TinyContext HTTP API server"
+    && chown -R tinycontext:tinycontext /data \
+    && chmod +x /app/docker-entrypoint.sh
 
 EXPOSE 8000
 VOLUME ["/data"]
-CMD ["uvicorn", "servers.fastapi_server:app", "--host", "0.0.0.0", "--port", "8000"]
-
-FROM runtime-base AS mcp
-
-LABEL org.opencontainers.image.title="TinyContext MCP" \
-      org.opencontainers.image.description="TinyContext MCP server"
-
-VOLUME ["/data"]
-CMD ["python", "servers/mcp_server.py"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["tinycontext", "mcp"]

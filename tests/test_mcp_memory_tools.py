@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from servers.mcp_server import recall_memories_tool, save_memories_tool
-from services.memory_store_service import close_connection
+from tinycontext.servers.mcp_server import recall_memories_tool, save_memories_tool
+from tinycontext.services.memory_store_service import close_connection
 
 
 def _fn(coro):
@@ -29,7 +29,7 @@ class McpMemoryToolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_save_memories_tool(self) -> None:
         with patch(
-            "servers.mcp_server.load_context_config",
+            "tinycontext.servers.mcp_server.load_context_config",
             return_value=self.config,
         ):
             payload = await _fn(save_memories_tool)(
@@ -40,7 +40,7 @@ class McpMemoryToolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_recall_memories_tool(self) -> None:
         with patch(
-            "servers.mcp_server.load_context_config",
+            "tinycontext.servers.mcp_server.load_context_config",
             return_value=self.config,
         ):
             await _fn(save_memories_tool)(
@@ -55,7 +55,7 @@ class McpMemoryToolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_save_memories_tool_maps_errors(self) -> None:
         with patch(
-            "servers.mcp_server.load_context_config",
+            "tinycontext.servers.mcp_server.load_context_config",
             return_value=self.config,
         ):
             with self.assertRaises(ValueError) as ctx:

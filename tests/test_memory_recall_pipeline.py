@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pipelines.memory_recall import memory_recall_run
-from services.memory_service import MemoryInput, save_memories
-from services.memory_store_service import close_connection
+from tinycontext import MemoryInput, save_memories
+from tinycontext.pipelines.memory_recall import memory_recall_run
+from tinycontext.services.memory_store_service import close_connection
 
 
 class MemoryRecallPipelineTests(unittest.TestCase):
@@ -36,7 +36,8 @@ class MemoryRecallPipelineTests(unittest.TestCase):
             session_id=None,
             max_tokens=4,
             top_k=2,
-            config=self.config,
+            db_path=Path(self.config["memory_db_path"]),
+            encoding_name=self.config["encoding_name"],
         )
         self.assertTrue(payload["truncated"])
         self.assertLessEqual(payload["total_tokens"], 8)
@@ -47,7 +48,8 @@ class MemoryRecallPipelineTests(unittest.TestCase):
             session_id=None,
             max_tokens=100,
             top_k=5,
-            config=self.config,
+            db_path=Path(self.config["memory_db_path"]),
+            encoding_name=self.config["encoding_name"],
         )
         self.assertEqual(payload["memories"], [])
         self.assertEqual(payload["total_tokens"], 0)

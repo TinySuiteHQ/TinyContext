@@ -1,8 +1,7 @@
 services:
-  mcp:
+  tinycontext:
     build:
       context: .
-      target: mcp
       args:
         TINYCONTEXT_VERSION: local
     image: tinycontext:local
@@ -21,10 +20,18 @@ services:
   fastapi:
     build:
       context: .
-      target: fastapi
       args:
         TINYCONTEXT_VERSION: local
-    image: tinycontext-fastapi:local
+    image: tinycontext:local
+    command:
+      [
+        "uvicorn",
+        "tinycontext.servers.fastapi_server:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+      ]
     profiles:
       - fastapi
     ports:

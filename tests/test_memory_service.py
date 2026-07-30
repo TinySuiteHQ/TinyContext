@@ -4,14 +4,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from services.memory_service import (
+from tinycontext import MemoryInput, recall_memories, save_memories
+from tinycontext.errors import (
     EmptyMemoryError,
-    MemoryInput,
     SessionNotFoundError,
-    recall_memories,
-    save_memories,
 )
-from services.memory_store_service import close_connection
+from tinycontext.services.memory_store_service import close_connection
 
 
 class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
