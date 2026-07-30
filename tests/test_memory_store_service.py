@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from tinycontext.models import MemoryRow
+from tinycontext.services import memory_store_service
 from tinycontext.services.memory_store_service import (
     close_connection,
     embedding_storage_stats,
@@ -137,6 +138,26 @@ class MemoryStoreServiceTests(unittest.TestCase):
         finally:
             connection.close()
         self.assertEqual(storage_type, "blob")
+
+    def test_cosine_ranking_falls_back_when_extensions_are_unavailable(self) -> None:
+        connection = sqlite3.connect(":memory:")
+
+        class ExtensionlessConnection:
+            def create_function(self, *args: object, **kwargs: object) -> None:
+                connection.create_function(*args, **kwargs)
+
+        try:
+            loaded = memory_store_service._load_sqlite_vec(ExtensionlessConnection())
+            near = memory_store_service.sqlite_vec.serialize_float32([1.0, 0.0])
+            far = memory_store_service.sqlite_vec.serialize_float32([0.0, 1.0])
+            distance = connection.execute(
+                "SELECT vec_distance_cosine(?, ?)",
+                (near, far),
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        self.assertFalse(loaded)
+        self.assertAlmostEqual(distance, 1.0)
 
     def test_existing_database_is_migrated_without_losing_rows(self) -> None:
         connection = sqlite3.connect(self.db_path)

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sqlite3
+import struct
 import threading
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -41,12 +44,50 @@ _EMBEDDING_COLUMNS: dict[str, str] = {
 }
 
 
-def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
-    conn.enable_load_extension(True)
+def _cosine_distance(left: bytes, right: bytes) -> float:
+    """Compute cosine distance for sqlite-vec float32 BLOBs."""
+    if len(left) != len(right) or len(left) % 4:
+        raise ValueError("vectors must have matching float32 dimensions")
+    dimensions = len(left) // 4
+    if dimensions == 0:
+        raise ValueError("vectors must not be empty")
+    left_values = struct.unpack(f"{dimensions}f", left)
+    right_values = struct.unpack(f"{dimensions}f", right)
+    dot_product = sum(a * b for a, b in zip(left_values, right_values))
+    left_norm = math.sqrt(sum(value * value for value in left_values))
+    right_norm = math.sqrt(sum(value * value for value in right_values))
+    if left_norm == 0.0 or right_norm == 0.0:
+        return 1.0
+    similarity = dot_product / (left_norm * right_norm)
+    return 1.0 - max(-1.0, min(1.0, similarity))
+
+
+def _register_python_vector_functions(conn: sqlite3.Connection) -> None:
+    conn.create_function(
+        "vec_distance_cosine",
+        2,
+        _cosine_distance,
+        deterministic=True,
+    )
+
+
+def _load_sqlite_vec(conn: sqlite3.Connection) -> bool:
+    """Load sqlite-vec, falling back when SQLite extensions are unavailable."""
+    enable_load_extension = getattr(conn, "enable_load_extension", None)
+    if enable_load_extension is None:
+        _register_python_vector_functions(conn)
+        return False
+
     try:
-        sqlite_vec.load(conn)
-    finally:
-        conn.enable_load_extension(False)
+        enable_load_extension(True)
+        try:
+            sqlite_vec.load(conn)
+        finally:
+            enable_load_extension(False)
+    except (AttributeError, OSError, sqlite3.Error):
+        _register_python_vector_functions(conn)
+        return False
+    return True
 
 
 def _migrate_schema(conn: sqlite3.Connection) -> None:
@@ -317,11 +358,12 @@ def sqlite_vec_version() -> str:
     """Return the loaded extension version using an isolated SQLite connection."""
     conn = sqlite3.connect(":memory:")
     try:
-        _load_sqlite_vec(conn)
-        row = conn.execute("SELECT vec_version()").fetchone()
+        if _load_sqlite_vec(conn):
+            row = conn.execute("SELECT vec_version()").fetchone()
+            return str(row[0])
+        return f"{version('sqlite-vec')} (Python cosine fallback)"
     finally:
         conn.close()
-    return str(row[0])
 
 
 def session_exists(db_path: Path, session_id: str) -> bool:
