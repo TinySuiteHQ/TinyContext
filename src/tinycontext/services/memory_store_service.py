@@ -5,7 +5,9 @@ import os
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
+
+import sqlite_vec
 
 from tinycontext.models import MemoryRow
 
@@ -17,13 +19,46 @@ CREATE TABLE IF NOT EXISTS memories (
   content TEXT NOT NULL,
   tags TEXT,
   metadata TEXT,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  embedding BLOB,
+  embedding_model TEXT,
+  embedding_dimensions INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id);
 CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at);
 """
+_EMBEDDING_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_memories_embedding_model
+ON memories(embedding_model, embedding_dimensions)
+WHERE embedding IS NOT NULL;
+"""
 
 _BUSY_TIMEOUT_MS = 5000
+_EMBEDDING_COLUMNS: dict[str, str] = {
+    "embedding": "BLOB",
+    "embedding_model": "TEXT",
+    "embedding_dimensions": "INTEGER",
+}
+
+
+def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
+    conn.enable_load_extension(True)
+    try:
+        sqlite_vec.load(conn)
+    finally:
+        conn.enable_load_extension(False)
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(memories)").fetchall()
+    }
+    for name, column_type in _EMBEDDING_COLUMNS.items():
+        if name not in columns:
+            conn.execute(f"ALTER TABLE memories ADD COLUMN {name} {column_type}")
+    conn.executescript(_EMBEDDING_INDEX_SQL)
+    conn.commit()
 
 
 class _ConnectionPool:
@@ -35,6 +70,7 @@ class _ConnectionPool:
         self._locks: dict[Path, threading.Lock] = {}
 
     def _get_or_create(self, db_path: Path) -> tuple[sqlite3.Connection, threading.Lock]:
+        db_path = Path(db_path)
         db_path = Path(os.path.normcase(os.path.normpath(str(db_path.expanduser()))))
         with self._guard:
             if db_path not in self._connections:
@@ -44,10 +80,16 @@ class _ConnectionPool:
                     check_same_thread=False,
                     timeout=_BUSY_TIMEOUT_MS / 1000,
                 )
-                conn.row_factory = sqlite3.Row
-                conn.execute("PRAGMA journal_mode=WAL")
-                conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
-                conn.executescript(_SCHEMA_SQL)
+                try:
+                    conn.row_factory = sqlite3.Row
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+                    _load_sqlite_vec(conn)
+                    conn.executescript(_SCHEMA_SQL)
+                    _migrate_schema(conn)
+                except Exception:
+                    conn.close()
+                    raise
                 self._connections[db_path] = conn
                 self._locks[db_path] = threading.Lock()
             return self._connections[db_path], self._locks[db_path]
@@ -58,6 +100,7 @@ class _ConnectionPool:
             return fn(conn)
 
     def close(self, db_path: Path) -> None:
+        db_path = Path(db_path)
         db_path = Path(os.path.normcase(os.path.normpath(str(db_path.expanduser()))))
         with self._guard:
             conn = self._connections.pop(db_path, None)
@@ -86,8 +129,18 @@ def insert_memories(db_path: Path, rows: list[MemoryRow]) -> None:
     def _insert(conn: sqlite3.Connection) -> None:
         conn.executemany(
             """
-            INSERT INTO memories (id, session_id, content, tags, metadata, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO memories (
+              id,
+              session_id,
+              content,
+              tags,
+              metadata,
+              created_at,
+              embedding,
+              embedding_model,
+              embedding_dimensions
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -97,6 +150,18 @@ def insert_memories(db_path: Path, rows: list[MemoryRow]) -> None:
                     json.dumps(row.tags),
                     json.dumps(row.metadata),
                     row.created_at,
+                    (
+                        sqlite_vec.serialize_float32(row.embedding)
+                        if row.embedding is not None
+                        else None
+                    ),
+                    row.embedding_model,
+                    (
+                        row.embedding_dimensions
+                        if row.embedding_dimensions is not None
+                        else len(row.embedding or [])
+                    )
+                    or None,
                 )
                 for row in rows
             ],
@@ -122,6 +187,8 @@ def _row_to_memory(row: sqlite3.Row) -> MemoryRow:
         tags=[str(tag) for tag in tags],
         metadata=metadata,
         created_at=str(row["created_at"]),
+        embedding_model=row["embedding_model"],
+        embedding_dimensions=row["embedding_dimensions"],
     )
 
 
@@ -132,7 +199,18 @@ def fetch_candidates(
     limit: int | None = None,
 ) -> list[MemoryRow]:
     def _fetch(conn: sqlite3.Connection) -> list[MemoryRow]:
-        query = "SELECT id, session_id, content, tags, metadata, created_at FROM memories"
+        query = """
+        SELECT
+          id,
+          session_id,
+          content,
+          tags,
+          metadata,
+          created_at,
+          embedding_model,
+          embedding_dimensions
+        FROM memories
+        """
         params: list[Any] = []
         if session_id is not None:
             query += " WHERE session_id = ?"
@@ -145,6 +223,105 @@ def fetch_candidates(
         return [_row_to_memory(row) for row in rows]
 
     return _pool.execute(db_path, _fetch)
+
+
+def update_memory_embeddings(
+    db_path: Path,
+    rows: Sequence[tuple[str, Sequence[float]]],
+    *,
+    embedding_model: str,
+) -> None:
+    """Store float32 embeddings for existing rows without changing their payloads."""
+    updates = [
+        (
+            sqlite_vec.serialize_float32(vector),
+            embedding_model,
+            len(vector),
+            memory_id,
+        )
+        for memory_id, vector in rows
+    ]
+    if not updates:
+        return
+
+    def _update(conn: sqlite3.Connection) -> None:
+        conn.executemany(
+            """
+            UPDATE memories
+            SET embedding = ?, embedding_model = ?, embedding_dimensions = ?
+            WHERE id = ?
+            """,
+            updates,
+        )
+        conn.commit()
+
+    _pool.execute(db_path, _update)
+
+
+def fetch_dense_scores(
+    db_path: Path,
+    query_embedding: Sequence[float],
+    *,
+    embedding_model: str,
+    session_id: str | None = None,
+) -> dict[str, float]:
+    """Run cosine similarity inside SQLite through sqlite-vec."""
+    if not query_embedding:
+        return {}
+
+    def _fetch(conn: sqlite3.Connection) -> dict[str, float]:
+        query = """
+        SELECT
+          id,
+          1.0 - vec_distance_cosine(embedding, ?) AS dense_score
+        FROM memories
+        WHERE embedding IS NOT NULL
+          AND embedding_model = ?
+          AND embedding_dimensions = ?
+        """
+        params: list[Any] = [
+            sqlite_vec.serialize_float32(query_embedding),
+            embedding_model,
+            len(query_embedding),
+        ]
+        if session_id is not None:
+            query += " AND session_id = ?"
+            params.append(session_id)
+        query += " ORDER BY dense_score DESC, created_at DESC"
+        rows = conn.execute(query, params).fetchall()
+        return {str(row["id"]): float(row["dense_score"]) for row in rows}
+
+    return _pool.execute(db_path, _fetch)
+
+
+def embedding_storage_stats(db_path: Path) -> dict[str, int]:
+    """Return storage counts used by doctor and tests."""
+    def _stats(conn: sqlite3.Connection) -> dict[str, int]:
+        row = conn.execute(
+            """
+            SELECT
+              COUNT(*) AS total,
+              COUNT(embedding) AS embedded
+            FROM memories
+            """
+        ).fetchone()
+        return {
+            "total": int(row["total"]),
+            "embedded": int(row["embedded"]),
+        }
+
+    return _pool.execute(db_path, _stats)
+
+
+def sqlite_vec_version() -> str:
+    """Return the loaded extension version using an isolated SQLite connection."""
+    conn = sqlite3.connect(":memory:")
+    try:
+        _load_sqlite_vec(conn)
+        row = conn.execute("SELECT vec_version()").fetchone()
+    finally:
+        conn.close()
+    return str(row[0])
 
 
 def session_exists(db_path: Path, session_id: str) -> bool:

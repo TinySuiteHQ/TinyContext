@@ -137,4 +137,6 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Smoke-test image entrypoint
-        run: docker run --rm tinycontext:test tinycontext --help
+        run: |
+          docker run --rm tinycontext:test tinycontext --help
+          docker run --rm tinycontext:test tinycontext doctor

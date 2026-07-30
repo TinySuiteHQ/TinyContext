@@ -23,3 +23,7 @@ def native_data_dir() -> Path:
 
 def native_memory_db_path() -> Path:
     return native_data_dir() / "memories.db"
+
+
+def native_models_dir() -> Path:
+    return native_data_dir() / "models"

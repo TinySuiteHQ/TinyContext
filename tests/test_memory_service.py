@@ -10,10 +10,12 @@ from tinycontext.errors import (
     SessionNotFoundError,
 )
 from tinycontext.services.memory_store_service import close_connection
+from tests.embedding_fakes import start_fake_embeddings
 
 
 class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
+        start_fake_embeddings(self)
         self._tmpdir = tempfile.TemporaryDirectory()
         self.config = {
             "memory_db_path": str(Path(self._tmpdir.name) / "memories.db"),
@@ -68,3 +70,14 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
                 session_id="missing",
                 config=self.config,
             )
+
+    def test_dense_similarity_recalls_a_semantic_match(self) -> None:
+        save_memories(
+            [
+                MemoryInput(content="Dog nutrition and exercise notes"),
+                MemoryInput(content="Quarterly finance spreadsheet"),
+            ],
+            config=self.config,
+        )
+        payload = recall_memories("canine health", config=self.config)
+        self.assertIn("Dog", payload["memories"][0]["content"])

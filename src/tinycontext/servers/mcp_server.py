@@ -156,7 +156,8 @@ for later retrieval. Each memory should be concise and self-contained.
 
 Use recall_memories when you need relevant prior context for the current task.
 Pass the user's question or task description as query. Results are ranked with
-BM25 and trimmed to the token budget so they fit local LLM context windows.
+hybrid BM25 and dense retrieval, then trimmed to the token budget so they fit
+local LLM context windows.
 """.strip()
 
 
@@ -290,6 +291,13 @@ async def recall_memories_tool(
 
 
 def main() -> None:
+    from tinycontext.services.onnx_bundle_service import ensure_onnx_bundle_sync
+
+    config = load_context_config()
+    ensure_onnx_bundle_sync(
+        str(config["embedding_model"]),
+        models_dir=str(config["models_dir"]),
+    )
     transport = os.environ.get("MCP_TRANSPORT", "stdio").strip() or "stdio"
     if transport not in {"stdio", "sse", "streamable-http"}:
         raise ValueError(

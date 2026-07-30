@@ -11,6 +11,7 @@ from tinycontext.config import ConfigInput, resolve_config
 from tinycontext.errors import EmptyMemoryError, RecallBudgetError
 from tinycontext.models import MemoryInput, MemoryRow
 from tinycontext.pipelines.memory_recall import memory_recall_run
+from tinycontext.services.embedding_service import embed_texts, embedding_model_key
 from tinycontext.services.memory_store_service import insert_memories
 from tinycontext.services.token_counter_service import token_count
 
@@ -37,12 +38,29 @@ def save_memories(
     resolved = _resolved_values(config)
     db_path = Path(str(resolved["memory_db_path"]))
     encoding_name = str(resolved["encoding_name"])
-    rows: list[MemoryRow] = []
-    saved: list[dict[str, Any]] = []
+    contents: list[str] = []
+    normalized_items: list[tuple[MemoryInput, str]] = []
     for item in memories:
         content = item.content.strip()
         if not content:
             raise EmptyMemoryError("memory content must not be empty")
+        contents.append(str(resolved["dense_document_prefix"]) + content)
+        normalized_items.append((item, content))
+
+    vectors = embed_texts(
+        contents,
+        embedding_model=str(resolved["embedding_model"]),
+        models_dir=Path(str(resolved["models_dir"])),
+        batch_size=int(resolved["embedding_batch_size"]),
+    )
+    model_key = embedding_model_key(
+        str(resolved["embedding_model"]),
+        models_dir=Path(str(resolved["models_dir"])),
+        document_prefix=str(resolved["dense_document_prefix"]),
+    )
+    rows: list[MemoryRow] = []
+    saved: list[dict[str, Any]] = []
+    for (item, content), vector in zip(normalized_items, vectors, strict=True):
         memory_id = str(uuid.uuid4())
         created_at = _utc_now_iso()
         tags = list(item.tags or [])
@@ -55,6 +73,9 @@ def save_memories(
                 tags=tags,
                 metadata=metadata,
                 created_at=created_at,
+                embedding=vector,
+                embedding_model=model_key,
+                embedding_dimensions=len(vector),
             )
         )
         saved.append(
@@ -93,4 +114,11 @@ def recall_memories(
         top_k=top_k or int(resolved["recall_top_k"]),
         db_path=Path(str(resolved["memory_db_path"])),
         encoding_name=str(resolved["encoding_name"]),
+        models_dir=Path(str(resolved["models_dir"])),
+        embedding_model=str(resolved["embedding_model"]),
+        embedding_batch_size=int(resolved["embedding_batch_size"]),
+        dense_weight=float(resolved["recall_dense_weight"]),
+        rrf_k=int(resolved["recall_rrf_k"]),
+        query_prefix=str(resolved["dense_query_prefix"]),
+        document_prefix=str(resolved["dense_document_prefix"]),
     )

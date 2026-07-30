@@ -34,6 +34,7 @@ class PublicConfigTests(unittest.TestCase):
                 json.dumps(
                     {
                         "memory_db_path": "../data/memories.db",
+                        "models_dir": "../models",
                         "recall_top_k": 5,
                     }
                 ),
@@ -41,7 +42,9 @@ class PublicConfigTests(unittest.TestCase):
             )
             config = TinyContextConfig.from_json(config_path)
             expected = Path(temp_dir) / "data" / "memories.db"
+            expected_models = Path(temp_dir) / "models"
             self.assertEqual(Path(config.memory_db_path), expected.resolve())
+            self.assertEqual(Path(config.models_dir), expected_models.resolve())
             self.assertEqual(config.recall_top_k, 5)
 
     def test_explicit_file_then_call_overrides(self) -> None:
@@ -76,6 +79,8 @@ class PublicConfigTests(unittest.TestCase):
             TinyContextConfig(recall_top_k=0)
         with self.assertRaisesRegex(ValueError, "encoding_name"):
             TinyContextConfig(encoding_name=" ")
+        with self.assertRaisesRegex(ValueError, "recall_dense_weight"):
+            TinyContextConfig(recall_dense_weight=1.1)
 
 
 class ServerConfigTests(unittest.TestCase):
@@ -102,6 +107,10 @@ class ServerConfigTests(unittest.TestCase):
                     "TINYCONTEXT_RECALL_TOP_K": "4",
                     "TINYCONTEXT_RECALL_MAX_TOKENS": "500",
                     "TINYCONTEXT_ENCODING_NAME": "cl100k_base",
+                    "TINYCONTEXT_MODELS_DIR": str(Path(temp_dir) / "models"),
+                    "TINYCONTEXT_EMBEDDING_MODEL": "balanced",
+                    "TINYCONTEXT_RECALL_DENSE_WEIGHT": "0.75",
+                    "TINYCONTEXT_DENSE_QUERY_PREFIX": "query: ",
                 },
                 clear=True,
             ):
@@ -110,6 +119,13 @@ class ServerConfigTests(unittest.TestCase):
         self.assertEqual(config["recall_top_k"], 4)
         self.assertEqual(config["recall_max_tokens"], 500)
         self.assertEqual(config["encoding_name"], "cl100k_base")
+        self.assertEqual(
+            os.path.normcase(str(Path(config["models_dir"]))),
+            os.path.normcase(str(Path(temp_dir) / "models")),
+        )
+        self.assertEqual(config["embedding_model"], "balanced")
+        self.assertEqual(config["recall_dense_weight"], 0.75)
+        self.assertEqual(config["dense_query_prefix"], "query: ")
 
     def test_explicit_config_path_wins(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir, patch.dict(

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from tinycontext.paths import native_data_dir, native_memory_db_path
+from tinycontext.paths import native_data_dir, native_memory_db_path, native_models_dir
 
 
 def default_config() -> dict[str, Any]:
@@ -18,12 +18,24 @@ def default_config() -> dict[str, Any]:
         "recall_top_k": 10,
         "recall_max_tokens": 2000,
         "encoding_name": "o200k_base",
+        "models_dir": str(native_models_dir()),
+        "embedding_model": "fast",
+        "embedding_batch_size": 32,
+        "recall_dense_weight": 0.5,
+        "recall_rrf_k": 60,
+        "dense_query_prefix": "",
+        "dense_document_prefix": "",
     }
 
 
-def _resolve_db_path(value: Any, *, base_dir: Path | None) -> str:
+def _resolve_path(
+    value: Any,
+    *,
+    default: Path,
+    base_dir: Path | None,
+) -> str:
     raw = str(value or "").strip()
-    path = Path(raw).expanduser() if raw else native_memory_db_path()
+    path = Path(raw).expanduser() if raw else default
     if not path.is_absolute():
         path = (base_dir or native_data_dir()) / path
     return os.path.normpath(str(path))
@@ -47,12 +59,19 @@ def normalize_config(
 
     config = default_config()
     config.update(values)
-    config["memory_db_path"] = _resolve_db_path(
+    resolved_base_dir = Path(base_dir).expanduser().resolve() if base_dir else None
+    config["memory_db_path"] = _resolve_path(
         config["memory_db_path"],
-        base_dir=Path(base_dir).expanduser().resolve() if base_dir else None,
+        default=native_memory_db_path(),
+        base_dir=resolved_base_dir,
+    )
+    config["models_dir"] = _resolve_path(
+        config["models_dir"],
+        default=native_models_dir(),
+        base_dir=resolved_base_dir,
     )
 
-    for key in ("recall_top_k", "recall_max_tokens"):
+    for key in ("recall_top_k", "recall_max_tokens", "embedding_batch_size"):
         try:
             value = int(config[key])
         except (TypeError, ValueError) as exc:
@@ -61,10 +80,29 @@ def normalize_config(
             raise ValueError(f"{key} must be at least 1")
         config[key] = value
 
-    encoding_name = str(config["encoding_name"] or "").strip()
-    if not encoding_name:
-        raise ValueError("encoding_name must not be empty")
-    config["encoding_name"] = encoding_name
+    try:
+        dense_weight = float(config["recall_dense_weight"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("recall_dense_weight must be a number") from exc
+    if dense_weight <= 0.0 or dense_weight > 1.0:
+        raise ValueError("recall_dense_weight must be greater than 0 and at most 1")
+    config["recall_dense_weight"] = dense_weight
+
+    try:
+        rrf_k = int(config["recall_rrf_k"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("recall_rrf_k must be an integer") from exc
+    if rrf_k < 0:
+        raise ValueError("recall_rrf_k must be at least 0")
+    config["recall_rrf_k"] = rrf_k
+
+    for key in ("encoding_name", "embedding_model"):
+        value = str(config[key] or "").strip()
+        if not value:
+            raise ValueError(f"{key} must not be empty")
+        config[key] = value
+    for key in ("dense_query_prefix", "dense_document_prefix"):
+        config[key] = str(config[key] or "")
     return config
 
 

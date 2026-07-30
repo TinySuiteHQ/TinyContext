@@ -15,6 +15,7 @@ from tinycontext.servers.fastapi_server import (
 )
 from tinycontext.servers.mcp_server import recall_memories_tool, save_memories_tool
 from tinycontext.services.memory_store_service import close_connection
+from tests.embedding_fakes import start_fake_embeddings
 
 
 def _fn(coro):
@@ -23,6 +24,7 @@ def _fn(coro):
 
 class MemoryFastApiMcpParityTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
+        start_fake_embeddings(self)
         self._tmpdir = tempfile.TemporaryDirectory()
         self.config = {
             "memory_db_path": str(Path(self._tmpdir.name) / "memories.db"),

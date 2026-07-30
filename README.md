@@ -12,8 +12,8 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-supported-009688)
 
 TinyContext is a token-light local memory layer for AI agents. It stores concise
-memories in SQLite, ranks them against the current task, and returns only the
-context that fits the requested token budget.
+memories and their embeddings in SQLite, ranks them with hybrid BM25 and dense
+retrieval, and returns only the context that fits the requested token budget.
 
 No hosted account. No giant context dumps. No required vector database.
 
@@ -49,8 +49,10 @@ Add TinyContext to any stdio MCP client:
 }
 ```
 
-The no-argument `tinycontext` command runs stdio MCP. The database is created
-lazily in TinyContext's per-user data directory on the first save or recall.
+The no-argument `tinycontext` command runs stdio MCP. On its first launch,
+TinyContext downloads the selected ONNX embedding bundle into its per-user data
+directory. The database is created lazily on the first save or recall. Later
+launches reuse both local assets.
 
 Check the resolved configuration and storage readiness with:
 
@@ -138,7 +140,7 @@ Connect an MCP client to:
 }
 ```
 
-The `data` volume persists `/data/memories.db`.
+The `data` volume persists `/data/memories.db` and `/data/models`.
 
 Stop the service with:
 
@@ -170,14 +172,23 @@ flowchart LR
     B --> D[(SQLite)]
     C --> D
     C --> E[BM25 rank]
-    E --> F[Token budget trim]
+    C --> G[sqlite-vec cosine rank]
+    E --> H[Weighted RRF]
+    G --> H
+    H --> F[Token budget trim]
     F --> A
 ```
 
-1. Save concise memory records as text with optional tags and metadata.
-2. Filter by `session_id` when a session scope is supplied.
-3. Rank candidates against the query with BM25.
-4. Return the highest-ranked memories within the token budget.
+1. Generate embeddings locally with the selected ONNX model.
+2. Save text, metadata, and float32 embedding BLOBs in the same SQLite row.
+3. Filter by `session_id`, rank lexical matches with BM25, and calculate cosine
+   similarity in SQLite through `sqlite-vec`.
+4. Fuse both rankings with weighted reciprocal rank fusion (RRF).
+5. Return the highest-ranked memories within the token budget.
+
+Existing TinyContext databases are upgraded in place with nullable embedding
+columns. The first recall backfills embeddings for legacy rows; no database
+migration command or separate vector service is required.
 
 ## FastAPI
 
@@ -241,6 +252,13 @@ The core defaults are:
 | `recall_top_k` | `10` | Maximum memories considered |
 | `recall_max_tokens` | `2000` | Default recall token budget |
 | `encoding_name` | `o200k_base` | Tokenizer used for budgeting |
+| `models_dir` | Per-user TinyContext data directory | Downloaded ONNX bundles |
+| `embedding_model` | `fast` | `fast`, `balanced`, `quality`, or a Hugging Face repository |
+| `embedding_batch_size` | `32` | Local ONNX inference batch size |
+| `recall_dense_weight` | `0.5` | Dense contribution to weighted RRF |
+| `recall_rrf_k` | `60` | RRF rank constant |
+| `dense_query_prefix` | empty | Optional text prepended before embedding queries |
+| `dense_document_prefix` | empty | Optional text prepended before embedding memories |
 
 Server processes look for `context_config.json` in the per-user TinyContext
 configuration directory. A relative `memory_db_path` inside a JSON config is
@@ -255,6 +273,13 @@ Environment overrides:
 | `TINYCONTEXT_RECALL_TOP_K` | Override the default candidate count |
 | `TINYCONTEXT_RECALL_MAX_TOKENS` | Override the default token budget |
 | `TINYCONTEXT_ENCODING_NAME` | Override the tokenizer |
+| `TINYCONTEXT_MODELS_DIR` | Override the ONNX bundle directory |
+| `TINYCONTEXT_EMBEDDING_MODEL` | Override the embedding model |
+| `TINYCONTEXT_EMBEDDING_BATCH_SIZE` | Override inference batch size |
+| `TINYCONTEXT_RECALL_DENSE_WEIGHT` | Override the dense RRF weight |
+| `TINYCONTEXT_RECALL_RRF_K` | Override the RRF rank constant |
+| `TINYCONTEXT_DENSE_QUERY_PREFIX` | Override the dense query prefix |
+| `TINYCONTEXT_DENSE_DOCUMENT_PREFIX` | Override the dense document prefix |
 | `TINYCONTEXT_VERSION` | Set the FastAPI/container version |
 | `MCP_TRANSPORT` | `stdio`, `sse`, or `streamable-http` |
 | `MCP_HOST` | MCP HTTP bind host |

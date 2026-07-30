@@ -8,7 +8,13 @@ from rank_bm25 import BM25Okapi
 
 from tinycontext.errors import SessionNotFoundError
 from tinycontext.models import MemoryRow
-from tinycontext.services.memory_store_service import fetch_candidates, session_exists
+from tinycontext.services.embedding_service import embed_texts, embedding_model_key
+from tinycontext.services.memory_store_service import (
+    fetch_candidates,
+    fetch_dense_scores,
+    session_exists,
+    update_memory_embeddings,
+)
 from tinycontext.services.token_counter_service import token_count
 
 
@@ -24,6 +30,13 @@ def memory_recall_run(
     top_k: int,
     db_path: Path,
     encoding_name: str,
+    models_dir: Path | None = None,
+    embedding_model: str = "fast",
+    embedding_batch_size: int = 32,
+    dense_weight: float = 0.5,
+    rrf_k: int = 60,
+    query_prefix: str = "",
+    document_prefix: str = "",
 ) -> dict[str, Any]:
     if session_id is not None and not session_exists(db_path, session_id):
         raise SessionNotFoundError(f"session not found: {session_id}")
@@ -37,17 +50,97 @@ def memory_recall_run(
             "truncated": False,
         }
 
+    model_key = embedding_model_key(
+        embedding_model,
+        models_dir=models_dir,
+        document_prefix=document_prefix,
+    )
+    query_embedding = embed_texts(
+        [query_prefix + query],
+        embedding_model=embedding_model,
+        models_dir=models_dir,
+        batch_size=embedding_batch_size,
+    )[0]
+    stale = [
+        row
+        for row in candidates
+        if row.embedding_model != model_key
+        or row.embedding_dimensions != len(query_embedding)
+    ]
+    if stale:
+        document_embeddings = embed_texts(
+            [document_prefix + row.content for row in stale],
+            embedding_model=embedding_model,
+            models_dir=models_dir,
+            batch_size=embedding_batch_size,
+        )
+        update_memory_embeddings(
+            db_path,
+            [
+                (row.id, vector)
+                for row, vector in zip(stale, document_embeddings, strict=True)
+            ],
+            embedding_model=model_key,
+        )
+
+    dense_scores = fetch_dense_scores(
+        db_path,
+        query_embedding,
+        embedding_model=model_key,
+        session_id=session_id,
+    )
     query_tokens = _tokenize(query)
     corpus = [_tokenize(row.content) for row in candidates]
     if query_tokens and any(corpus):
-        scores = BM25Okapi(corpus).get_scores(query_tokens)
-        ranked = sorted(
-            zip(candidates, scores, strict=True),
+        bm25_values = BM25Okapi(corpus).get_scores(query_tokens)
+        lexical = sorted(
+            (
+                (row, score)
+                for row, tokens, score in zip(
+                    candidates,
+                    corpus,
+                    bm25_values,
+                    strict=True,
+                )
+                if set(tokens).intersection(query_tokens)
+            ),
             key=lambda item: item[1],
             reverse=True,
-        )[:top_k]
+        )
     else:
-        ranked = [(row, 0.0) for row in candidates[:top_k]]
+        lexical = []
+
+    lexical_ranks = {
+        row.id: rank
+        for rank, (row, _score) in enumerate(lexical, start=1)
+    }
+    dense_ranks = {
+        memory_id: rank
+        for rank, (memory_id, _score) in enumerate(
+            sorted(
+                dense_scores.items(),
+                key=lambda item: item[1],
+                reverse=True,
+            ),
+            start=1,
+        )
+    }
+    lexical_weight = 1.0 - dense_weight
+    fused: list[tuple[MemoryRow, float]] = []
+    for row in candidates:
+        score = 0.0
+        lexical_rank = lexical_ranks.get(row.id)
+        if lexical_rank is not None:
+            score += lexical_weight / (rrf_k + lexical_rank)
+        dense_rank = dense_ranks.get(row.id)
+        if dense_rank is not None:
+            score += dense_weight / (rrf_k + dense_rank)
+        fused.append((row, score))
+    ranked = sorted(
+        fused,
+        key=lambda item: item[1],
+        reverse=True,
+    )[:top_k]
 
     selected: list[dict[str, Any]] = []
     total_tokens = 0

@@ -3,7 +3,7 @@ FROM python:3.12-slim
 ARG TINYCONTEXT_VERSION=dev
 
 LABEL org.opencontainers.image.title="TinyContext" \
-      org.opencontainers.image.description="Token-light memory save and recall for local agents" \
+      org.opencontainers.image.description="Token-light SQLite hybrid memory for local agents" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.source="https://github.com/TinySuiteHQ/TinyContext" \
       org.opencontainers.image.version="${TINYCONTEXT_VERSION}" \
@@ -13,7 +13,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     TINYCONTEXT_VERSION=${TINYCONTEXT_VERSION} \
-    TINYCONTEXT_MEMORY_DB_PATH=/data/memories.db
+    TINYCONTEXT_MEMORY_DB_PATH=/data/memories.db \
+    TINYCONTEXT_MODELS_DIR=/data/models
 
 WORKDIR /app
 
@@ -26,7 +27,7 @@ COPY . .
 RUN pip install --upgrade pip \
     && pip install ".[server]" \
     && useradd --create-home --shell /usr/sbin/nologin tinycontext \
-    && mkdir -p /data \
+    && mkdir -p /data/models \
     && chown -R tinycontext:tinycontext /data \
     && chmod +x /app/docker-entrypoint.sh
 

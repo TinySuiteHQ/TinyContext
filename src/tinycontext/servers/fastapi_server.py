@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Any
 
@@ -18,9 +19,21 @@ def _tinycontext_version() -> str:
 
 app = FastAPI(
     title="TinyContext API",
-    description="Token-light memory save and recall endpoints for agents.",
+    description="Token-light hybrid memory save and recall endpoints for agents.",
     version=_tinycontext_version(),
 )
+
+
+@app.on_event("startup")
+async def _prepare_embedding_model() -> None:
+    from tinycontext.services.onnx_bundle_service import ensure_onnx_bundle_sync
+
+    config = load_context_config()
+    await asyncio.to_thread(
+        ensure_onnx_bundle_sync,
+        str(config["embedding_model"]),
+        models_dir=str(config["models_dir"]),
+    )
 
 
 class MemoryInputModel(BaseModel):

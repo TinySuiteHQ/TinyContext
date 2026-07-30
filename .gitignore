@@ -14,6 +14,9 @@ venv/
 # Local TinyContext data
 data/*
 !data/.gitkeep
+models/*
+!models/.gitkeep
+!models/README.md
 
 # Python packaging artifacts
 *.egg-info/

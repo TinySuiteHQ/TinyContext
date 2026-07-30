@@ -15,10 +15,12 @@ from tinycontext.servers.fastapi_server import (
     save_memories_endpoint,
 )
 from tinycontext.services.memory_store_service import close_connection
+from tests.embedding_fakes import start_fake_embeddings
 
 
 class FastApiMemoryEndpointTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
+        start_fake_embeddings(self)
         self._tmpdir = tempfile.TemporaryDirectory()
         self.config = {
             "memory_db_path": str(Path(self._tmpdir.name) / "memories.db"),

@@ -30,8 +30,20 @@ def _environment_overrides() -> dict[str, Any]:
         ("TINYCONTEXT_RECALL_TOP_K", "recall_top_k"),
         ("TINYCONTEXT_RECALL_MAX_TOKENS", "recall_max_tokens"),
         ("TINYCONTEXT_ENCODING_NAME", "encoding_name"),
+        ("TINYCONTEXT_MODELS_DIR", "models_dir"),
+        ("TINYCONTEXT_EMBEDDING_MODEL", "embedding_model"),
+        ("TINYCONTEXT_EMBEDDING_BATCH_SIZE", "embedding_batch_size"),
+        ("TINYCONTEXT_RECALL_DENSE_WEIGHT", "recall_dense_weight"),
+        ("TINYCONTEXT_RECALL_RRF_K", "recall_rrf_k"),
+        ("TINYCONTEXT_DENSE_QUERY_PREFIX", "dense_query_prefix"),
+        ("TINYCONTEXT_DENSE_DOCUMENT_PREFIX", "dense_document_prefix"),
     ):
-        value = os.environ.get(env_name, "").strip()
+        raw_value = os.environ.get(env_name, "")
+        value = (
+            raw_value
+            if config_name in {"dense_query_prefix", "dense_document_prefix"}
+            else raw_value.strip()
+        )
         if value:
             overrides[config_name] = value
     return overrides
