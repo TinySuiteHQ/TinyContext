@@ -33,5 +33,7 @@ RUN pip install --upgrade pip \
 
 EXPOSE 8000
 VOLUME ["/data"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD tinycontext doctor || exit 1
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["tinycontext", "mcp"]
