@@ -179,3 +179,19 @@ def reindex_notice(db_path: Path) -> str | None:
 
 def is_reindex_active(db_path: Path) -> bool:
     return reindex_notice(db_path) is not None
+
+
+def wait_for_reindex(db_path: Path, timeout: float | None = None) -> None:
+    """Wait for the database's worker before its connection is torn down.
+
+    The worker deliberately runs as a daemon so a server can shut down without
+    waiting for a large re-embedding backlog.  Callers that are removing a
+    database (notably test and application shutdown cleanup) must synchronize
+    with it, though: otherwise the worker can acquire a freshly recreated pool
+    connection after the old one has been closed.
+    """
+    key = _job_key(db_path)
+    with _lock:
+        thread = _threads.get(key)
+    if thread is not None:
+        thread.join(timeout=timeout)

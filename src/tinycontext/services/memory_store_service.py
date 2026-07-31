@@ -154,13 +154,26 @@ class _ConnectionPool:
         db_path = Path(db_path)
         db_path = Path(os.path.normcase(os.path.normpath(str(db_path.expanduser()))))
         with self._guard:
-            conn = self._connections.pop(db_path, None)
+            conn = self._connections.get(db_path)
+            lock = self._locks.get(db_path)
+            if conn is None:
+                return
+            # Remove the entry only after acquiring its operation lock. This
+            # prevents a caller that already obtained the connection from
+            # racing with close, while callers arriving after this point create
+            # a separate, valid pool entry.
+            if lock is not None:
+                lock.acquire()
+            self._connections.pop(db_path, None)
             self._locks.pop(db_path, None)
         if conn is not None:
             try:
                 conn.close()
             except Exception:
                 pass
+            finally:
+                if lock is not None:
+                    lock.release()
 
 
 _pool = _ConnectionPool()
@@ -168,6 +181,11 @@ _pool = _ConnectionPool()
 
 def close_connection(db_path: Path) -> None:
     """Release a pooled database connection, primarily for tests and shutdown."""
+    # Reindex workers are daemon threads, so they do not keep the process alive
+    # long enough to finish using a pooled connection during teardown.
+    from tinycontext.services.embedding_reindex_service import wait_for_reindex
+
+    wait_for_reindex(db_path, timeout=10.0)
     _pool.close(db_path)
 
 
