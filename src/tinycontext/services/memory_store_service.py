@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import sqlite3
 import struct
 import threading
@@ -26,7 +27,18 @@ CREATE TABLE IF NOT EXISTS memories (
 );
 CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id);
 CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at);
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+  id UNINDEXED,
+  session_id UNINDEXED,
+  content
+);
 """
+_FTS_BACKFILL_SQL = """
+INSERT INTO memories_fts (id, session_id, content)
+SELECT id, session_id, content FROM memories
+WHERE id NOT IN (SELECT id FROM memories_fts);
+"""
+_FTS_TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
 _EMBEDDING_INDEX_SQL = """
 CREATE INDEX IF NOT EXISTS idx_memories_embedding_model
 ON memories(embedding_model, embedding_dimensions)
@@ -96,6 +108,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         if name not in columns:
             conn.execute(f"ALTER TABLE memories ADD COLUMN {name} {column_type}")
     conn.executescript(_EMBEDDING_INDEX_SQL)
+    conn.executescript(_FTS_BACKFILL_SQL)
     conn.commit()
 
 
@@ -199,6 +212,10 @@ def insert_memories(db_path: Path, rows: list[MemoryRow]) -> None:
                 )
                 for row in rows
             ],
+        )
+        conn.executemany(
+            "INSERT INTO memories_fts (id, session_id, content) VALUES (?, ?, ?)",
+            [(row.id, row.session_id, row.content) for row in rows],
         )
         conn.commit()
 
@@ -312,6 +329,38 @@ def fetch_dense_scores(
         query += " ORDER BY dense_score DESC, created_at DESC"
         rows = conn.execute(query, params).fetchall()
         return {str(row["id"]): float(row["dense_score"]) for row in rows}
+
+    return _pool.execute(db_path, _fetch)
+
+
+def fetch_sparse_scores(
+    db_path: Path,
+    query: str,
+    *,
+    session_id: str | None = None,
+) -> dict[str, float]:
+    """Run BM25 keyword scoring inside SQLite through the FTS5 index.
+
+    FTS5's bm25() returns lower-is-better values (0 or negative), so results
+    are negated to match the higher-is-better convention used elsewhere.
+    """
+    tokens = _FTS_TOKEN_RE.findall(query.lower())
+    if not tokens:
+        return {}
+    match_query = " OR ".join(f'"{token}"' for token in tokens)
+
+    def _fetch(conn: sqlite3.Connection) -> dict[str, float]:
+        sql = """
+        SELECT id, bm25(memories_fts) AS score
+        FROM memories_fts
+        WHERE memories_fts MATCH ?
+        """
+        params: list[Any] = [match_query]
+        if session_id is not None:
+            sql += " AND session_id = ?"
+            params.append(session_id)
+        rows = conn.execute(sql, params).fetchall()
+        return {str(row["id"]): -float(row["score"]) for row in rows}
 
     return _pool.execute(db_path, _fetch)
 

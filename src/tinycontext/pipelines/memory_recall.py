@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
-
-from rank_bm25 import BM25Okapi
 
 from tinycontext.errors import SessionNotFoundError
 from tinycontext.models import MemoryRow
@@ -12,6 +9,7 @@ from tinycontext.services.embedding_service import embed_texts, embedding_model_
 from tinycontext.services.memory_store_service import (
     fetch_candidates,
     fetch_dense_scores,
+    fetch_sparse_scores,
     session_exists,
     update_memory_embeddings,
 )
@@ -20,10 +18,6 @@ from tinycontext.services.token_counter_service import token_count
 
 _HIGH_RELEVANCE_THRESHOLD = 0.90
 _MEDIUM_RELEVANCE_THRESHOLD = 0.75
-
-
-def _tokenize(text: str) -> list[str]:
-    return [token for token in re.findall(r"[A-Za-z0-9_]+", text.lower()) if token]
 
 
 def _rank_by_score(scores: list[float]) -> dict[int, int]:
@@ -113,14 +107,8 @@ def memory_recall_run(
         embedding_model=model_key,
         session_id=session_id,
     )
-    query_tokens = _tokenize(query)
-    corpus = [_tokenize(row.content) for row in candidates]
-    if query_tokens and any(corpus):
-        bm25_scores = [
-            float(score) for score in BM25Okapi(corpus).get_scores(query_tokens)
-        ]
-    else:
-        bm25_scores = [0.0 for _row in candidates]
+    sparse_scores = fetch_sparse_scores(db_path, query, session_id=session_id)
+    bm25_scores = [float(sparse_scores.get(row.id, 0.0)) for row in candidates]
 
     dense_values = [float(dense_scores.get(row.id, 0.0)) for row in candidates]
     bm25_ranks = _rank_by_score(bm25_scores)
