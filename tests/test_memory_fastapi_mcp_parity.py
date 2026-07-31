@@ -82,3 +82,11 @@ class MemoryFastApiMcpParityTests(unittest.IsolatedAsyncioTestCase):
             f'relevance="{fastapi_payload["memories"][0]["relevance"]}"',
             mcp_payload,
         )
+        self.assertIn(
+            f'created_at="{fastapi_payload["memories"][0]["created_at"]}"',
+            mcp_payload,
+        )
+        self.assertIn(
+            f'current_time="{fastapi_payload["current_time"]}"',
+            mcp_payload,
+        )

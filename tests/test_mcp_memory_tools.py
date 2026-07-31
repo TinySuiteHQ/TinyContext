@@ -53,8 +53,8 @@ class McpMemoryToolTests(unittest.IsolatedAsyncioTestCase):
                 [{"content": "user likes concise answers"}],
             )
             payload = await _fn(recall_memories_tool)("concise answers")
-        self.assertIn("<recalled_memories>", payload)
-        self.assertIn('<memory index="1" relevance="high">', payload)
+        self.assertIn('<recalled_memories current_time="', payload)
+        self.assertIn('<memory index="1" relevance="high" created_at="', payload)
         self.assertIn("user likes concise answers", payload)
         self.assertIn("</memory>", payload)
 

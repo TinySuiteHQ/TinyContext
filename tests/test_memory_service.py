@@ -70,6 +70,8 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["memories"][0]["scores"]["rrf"], 1.0)
         self.assertIn("dense", payload["memories"][0]["scores"])
         self.assertIn("bm25", payload["memories"][0]["scores"])
+        self.assertIn("created_at", payload["memories"][0])
+        self.assertIn("current_time", payload)
 
     def test_recall_unknown_session_raises(self) -> None:
         with self.assertRaises(SessionNotFoundError):

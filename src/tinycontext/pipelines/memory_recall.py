@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,14 @@ from tinycontext.services.token_counter_service import token_count
 
 _HIGH_RELEVANCE_THRESHOLD = 0.90
 _MEDIUM_RELEVANCE_THRESHOLD = 0.75
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc).replace(microsecond=0)
+
+
+def _iso_utc(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
 
 
 def _rank_by_score(scores: list[float]) -> dict[int, int]:
@@ -61,8 +70,10 @@ def memory_recall_run(
 
     candidates = fetch_candidates(db_path, session_id=session_id)
     if not candidates:
+        current_time = _utc_now()
         return {
             "query": query,
+            "current_time": _iso_utc(current_time),
             "memories": [],
             "total_tokens": 0,
             "truncated": False,
@@ -153,6 +164,7 @@ def memory_recall_run(
         reverse=True,
     )[:top_k]
 
+    current_time = _utc_now()
     selected: list[dict[str, Any]] = []
     total_tokens = 0
     truncated = False
@@ -163,14 +175,19 @@ def memory_recall_run(
             break
         if not selected and content_tokens > max_tokens:
             truncated = True
-            selected.append(_memory_payload(row, rank, scores, content_tokens))
+            selected.append(
+                _memory_payload(row, rank, scores, content_tokens)
+            )
             total_tokens = content_tokens
             break
-        selected.append(_memory_payload(row, rank, scores, content_tokens))
+        selected.append(
+            _memory_payload(row, rank, scores, content_tokens)
+        )
         total_tokens += content_tokens
 
     return {
         "query": query,
+        "current_time": _iso_utc(current_time),
         "memories": selected,
         "total_tokens": total_tokens,
         "truncated": truncated,
