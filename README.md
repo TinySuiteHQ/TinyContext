@@ -8,6 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/TinySuiteHQ/TinyContext?label=release)](https://github.com/TinySuiteHQ/TinyContext/releases)
 [![Docker Pulls](https://img.shields.io/docker/pulls/marcellm01/tinycontext?label=docker%20pulls)](https://hub.docker.com/r/marcellm01/tinycontext)
+[![Docker publish](https://github.com/TinySuiteHQ/TinyContext/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/TinySuiteHQ/TinyContext/actions/workflows/docker-publish.yml)
 ![MCP Server](https://img.shields.io/badge/MCP-server-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-supported-009688)
 
@@ -320,6 +321,12 @@ uvicorn servers.fastapi_server:app --host 0.0.0.0 --port 8000
 - `tinycontext serve`: Streamable HTTP MCP
 - `tinycontext doctor`: configuration and storage readiness
 - `tinycontext.servers.fastapi_server:app`: optional FastAPI application
+
+## Security
+
+Release images are scanned with Trivy, run as a non-root user, and signed
+with Cosign. See [SECURITY.md](SECURITY.md) for details and how to report a
+vulnerability.
 
 ## License
 
