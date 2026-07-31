@@ -1,79 +1,133 @@
 # TinyContext
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-![MCP Server](https://img.shields.io/badge/MCP-server-blue)
-![FastAPI](https://img.shields.io/badge/FastAPI-supported-009688)
+<!-- mcp-name: io.github.TinySuiteHQ/tinycontext -->
 
 **Context that fits your local LLMs.**
 
-TinyContext is a token-light memory layer for local AI agents. It helps agents
-save concise memories and recall only the context that earns its place in the
-prompt.
+[![PyPI version](https://img.shields.io/pypi/v/tinysuite-context?label=pypi)](https://pypi.org/project/tinysuite-context/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/TinySuiteHQ/TinyContext?label=release)](https://github.com/TinySuiteHQ/TinyContext/releases)
+[![Docker Pulls](https://img.shields.io/docker/pulls/marcellm01/tinycontext?label=docker%20pulls)](https://hub.docker.com/r/marcellm01/tinycontext)
+![MCP Server](https://img.shields.io/badge/MCP-server-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-supported-009688)
 
-Most memory systems try to remember everything. TinyContext takes the opposite
-approach: remember what matters, rank it quickly, and return it under a strict
-token budget.
+TinyContext is a token-light local memory layer for AI agents. It stores concise
+memories and their embeddings in SQLite, ranks them with hybrid BM25 and dense
+retrieval, and returns only the context that fits the requested token budget.
 
-No hosted dashboard. No account system. No giant context dumps. Just save ->
-rank -> recall.
+No hosted account. No giant context dumps. No required vector database.
 
-## Why TinyContext exists
+## Choose a tier
 
-Local and smaller LLMs are useful, but they do not have unlimited room for
-history, notes, preferences, project decisions, and previous research. Dumping
-entire chat logs or oversized memory summaries into the prompt wastes tokens and
-makes weaker models worse, not better.
+| Tier | Use it when | Entry point |
+| --- | --- | --- |
+| Python library | You are building an agent or Python application | `pip install tinysuite-context` |
+| One-command MCP | An MCP client should launch TinyContext for you | `uvx --python 3.12 --from "tinysuite-context[server]" tinycontext` |
+| Docker | You want persistent self-hosted storage and HTTP MCP | `docker compose ... up -d` |
 
-TinyContext is built around one idea:
+The Python library contains the memory engine. MCP, FastAPI, and Docker are
+adapters around the same `save_memories` and `recall_memories` operations.
 
-> Every memory has a cost. TinyContext only recalls what earns its place.
+## One-command MCP
 
-It is not trying to be a full agent platform, enterprise knowledge graph, or
-hosted memory cloud. It is a small MCP-native context layer for agents that need
-to remember without bloating the prompt.
+Add TinyContext to any stdio MCP client:
 
-## Why people use it
-
-- Add durable session memory to Cursor, Cline, Roo Code, Claude Desktop, or any MCP client.
-- Keep recalled context small enough for local LLM windows.
-- Store memories in a local SQLite database you control.
-- Recall by relevance instead of dumping entire history into the model.
-- Put a hard token budget around memory retrieval.
-- Use MCP as the primary interface, with an optional HTTP API for debugging.
-
-## Philosophy
-
-TinyContext is opinionated:
-
-- **Remember less, recall better.** Memory should improve the answer, not flood the model.
-- **Token budgets are a feature.** `max_tokens` is not an afterthought; it is the core interface.
-- **Local-first by default.** Your agent's memory should be inspectable, portable, and self-hosted.
-- **Context beats history.** The model does not need everything that happened. It needs the few things that matter now.
-- **Small models deserve good tools.** Memory should make local LLMs more useful without requiring huge context windows.
-
-## How it fits with TinySearch
-
-TinySearch finds fresh external context. TinyContext keeps the useful parts.
-
-Together, they form a simple token-light loop for local agents:
-
-```text
-search -> extract what matters -> remember -> recall under budget
+```json
+{
+  "mcpServers": {
+    "tinycontext": {
+      "command": "uvx",
+      "args": [
+        "--python",
+        "3.12",
+        "--from",
+        "tinysuite-context[server]",
+        "tinycontext"
+      ]
+    }
+  }
+}
 ```
 
-TinySearch helps an agent look things up without burning context on irrelevant
-pages. TinyContext helps the agent avoid searching for the same useful facts over
-and over again.
+The no-argument `tinycontext` command runs stdio MCP. On its first launch,
+TinyContext downloads the selected ONNX embedding bundle into its per-user data
+directory. The database is created lazily on the first save or recall. Later
+launches reuse both local assets.
 
-## Quick start
-
-Run TinyContext as an MCP server over Streamable HTTP:
+Check the resolved configuration and storage readiness with:
 
 ```bash
-docker compose -f "https://github.com/MarcellM01/TinyContext.git#main:compose.quickstart.yaml" up -d
+uvx --python 3.12 --from "tinysuite-context[server]" tinycontext doctor
 ```
 
-Then connect your MCP client to:
+TinyContext exposes two tools:
+
+```text
+save_memories(memories)
+recall_memories(query)
+```
+
+- Use `save_memories` for durable facts, preferences, decisions, and research notes.
+- Use `recall_memories` before answering when previous context may help.
+
+## Python library
+
+Install only the transport-independent core:
+
+```bash
+pip install tinysuite-context
+```
+
+```python
+from pathlib import Path
+
+from tinycontext import (
+    MemoryInput,
+    TinyContextConfig,
+    recall_memories,
+    save_memories,
+)
+
+config = TinyContextConfig(
+    memory_db_path=str(Path("agent-memory.db").resolve()),
+    recall_max_tokens=800,
+)
+
+save_memories(
+    [
+        MemoryInput(
+            content="The project uses SQLite for local state.",
+            tags=["architecture"],
+            metadata={"source": "design-session"},
+        )
+    ],
+    session_id="project-a",
+    config=config,
+)
+
+result = recall_memories(
+    "How does the project store state?",
+    session_id="project-a",
+    config=config,
+)
+
+for memory in result["memories"]:
+    print(memory["content"])
+```
+
+Programmatic configuration does not read environment variables or depend on the
+checkout. Passing no config uses the per-user data directory returned by
+`platformdirs`.
+
+## Docker
+
+Run the published image as an MCP server over Streamable HTTP:
+
+```bash
+docker compose -f "https://github.com/TinySuiteHQ/TinyContext.git#main:compose.quickstart.yaml" up -d
+```
+
+Connect an MCP client to:
 
 ```json
 {
@@ -85,26 +139,30 @@ Then connect your MCP client to:
 }
 ```
 
-Stop and remove the containers later with:
+The `data` volume persists `/data/memories.db` and `/data/models`.
+
+Stop the service with:
 
 ```bash
-docker compose -f "https://github.com/MarcellM01/TinyContext.git#main:compose.quickstart.yaml" down
+docker compose -f "https://github.com/TinySuiteHQ/TinyContext.git#main:compose.quickstart.yaml" down
 ```
 
-TinyContext exposes two MCP tools:
+For a local image build:
 
-```text
-save_memories(memories, session_id?)
-recall_memories(query, session_id?, max_tokens?, top_k?)
+```bash
+docker compose up -d --build
 ```
 
-Typical routing:
+The optional FastAPI profile uses the same image:
 
-- Use `save_memories` when the agent learns a durable fact, preference, project decision, or research note.
-- Use `recall_memories` before answering when prior context may help.
-- Keep `max_tokens` small by default. If memory cannot fit, it probably should not be recalled.
+```bash
+docker compose --profile fastapi up -d --build
+```
 
-## How it works
+- MCP Streamable HTTP: `http://localhost:8000/mcp`
+- FastAPI: `http://localhost:8001`
+
+## How recall works
 
 ```mermaid
 flowchart LR
@@ -113,53 +171,42 @@ flowchart LR
     B --> D[(SQLite)]
     C --> D
     C --> E[BM25 rank]
-    E --> F[Token budget trim]
+    C --> G[sqlite-vec cosine rank]
+    E --> H[Weighted RRF]
+    G --> H
+    H --> F[Token budget trim]
     F --> A
 ```
 
-The flow is intentionally simple:
+1. Generate embeddings locally with the selected ONNX model.
+2. Save text, metadata, and float32 embedding BLOBs in the same SQLite row.
+3. Filter by `session_id`, rank lexical matches with BM25, and calculate cosine
+   similarity in SQLite through `sqlite-vec`.
+4. Fuse both rankings with weighted reciprocal rank fusion (RRF).
+5. Return the highest-ranked memories within the token budget.
 
-1. Save concise memories as plain text records.
-2. Rank candidate memories against the current query.
-3. Trim the result set to the requested token budget.
-4. Return only the context that should be added to the prompt.
+Existing TinyContext databases are upgraded in place with nullable embedding
+columns. The first recall backfills embeddings for legacy rows; no database
+migration command or separate vector service is required.
 
-## Run from source
+## FastAPI
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python servers/mcp_server.py
-```
-
-For HTTP transport:
-
-```bash
-MCP_TRANSPORT=streamable-http MCP_HOST=0.0.0.0 MCP_PORT=8000 python servers/mcp_server.py
-```
-
-For the optional FastAPI server:
-
-```bash
-uvicorn servers.fastapi_server:app --host 0.0.0.0 --port 8000
-```
-
-## HTTP endpoints
+The optional HTTP API mirrors the two MCP tools.
 
 | Method | Path | Purpose |
-|--------|------|---------|
+| --- | --- | --- |
 | GET | `/health` | Liveness |
 | POST/GET | `/save_memories` | Persist one or more memories |
-| POST/GET | `/recall_memories` | Retrieve ranked memories within a token budget |
+| POST/GET | `/recall_memories` | Recall ranked memories within a token budget |
 
-### `save_memories`
+Install and run it directly:
 
-Use this when an agent learns something durable enough to be useful later:
-preferences, project decisions, implementation notes, source findings, or
-constraints the user does not want to repeat.
+```bash
+pip install "tinysuite-context[server]"
+uvicorn tinycontext.servers.fastapi_server:app --host 0.0.0.0 --port 8000
+```
 
-Request body:
+### Save request
 
 ```json
 {
@@ -174,27 +221,7 @@ Request body:
 }
 ```
 
-Response:
-
-```json
-{
-  "saved": [
-    {
-      "id": "uuid",
-      "session_id": "optional-session",
-      "content_tokens": 5,
-      "created_at": "2026-06-30T10:00:00Z"
-    }
-  ]
-}
-```
-
-### `recall_memories`
-
-Use this when previous context may help the current answer. The `max_tokens`
-parameter controls how much memory is allowed back into the prompt.
-
-Request body:
+### Recall request
 
 ```json
 {
@@ -205,31 +232,10 @@ Request body:
 }
 ```
 
-Response:
-
-```json
-{
-  "query": "user preferences",
-  "memories": [
-    {
-      "id": "uuid",
-      "content": "User prefers concise answers",
-      "score": 1.23,
-      "content_tokens": 5,
-      "tags": ["preference"],
-      "metadata": {"source": "chat"},
-      "created_at": "2026-06-30T10:00:00Z"
-    }
-  ],
-  "total_tokens": 5,
-  "truncated": false
-}
-```
-
 ### Error codes
 
 | Code | HTTP | Meaning |
-|------|------|---------|
+| --- | --- | --- |
 | `empty_memory` | 400 | Missing or blank memory content/query |
 | `session_not_found` | 404 | No memories exist for the requested session |
 | `recall_budget` | 400 | Invalid recall budget parameters |
@@ -237,51 +243,84 @@ Response:
 
 ## Configuration
 
-Default config lives in [`configs/context_config.json`](configs/context_config.json).
+The core defaults are:
 
 | Key | Default | Description |
-|-----|---------|-------------|
-| `memory_db_path` | `data/memories.db` | SQLite database path |
-| `recall_top_k` | `10` | Max memories to consider |
+| --- | --- | --- |
+| `memory_db_path` | Per-user TinyContext data directory | SQLite database |
+| `recall_top_k` | `10` | Maximum memories considered |
 | `recall_max_tokens` | `2000` | Default recall token budget |
 | `encoding_name` | `o200k_base` | Tokenizer used for budgeting |
+| `models_dir` | Per-user TinyContext data directory | Downloaded ONNX bundles |
+| `embedding_model` | `fast` | `fast`, `balanced`, `quality`, or a Hugging Face repository |
+| `embedding_batch_size` | `32` | Local ONNX inference batch size |
+| `recall_dense_weight` | `0.5` | Dense contribution to weighted RRF |
+| `recall_rrf_k` | `60` | RRF rank constant |
+| `dense_query_prefix` | empty | Optional text prepended before embedding queries |
+| `dense_document_prefix` | empty | Optional text prepended before embedding memories |
+
+Server processes look for `context_config.json` in the per-user TinyContext
+configuration directory. A relative `memory_db_path` inside a JSON config is
+resolved relative to that file.
 
 Environment overrides:
 
 | Variable | Purpose |
-|----------|---------|
-| `TINYCONTEXT_CONFIG_PATH` | Override config JSON path |
-| `TINYCONTEXT_MEMORY_DB_PATH` | Override SQLite database path |
-| `TINYCONTEXT_VERSION` | API version string |
+| --- | --- |
+| `TINYCONTEXT_CONFIG_PATH` | Use an explicit JSON configuration file |
+| `TINYCONTEXT_MEMORY_DB_PATH` | Override the SQLite database path |
+| `TINYCONTEXT_RECALL_TOP_K` | Override the default candidate count |
+| `TINYCONTEXT_RECALL_MAX_TOKENS` | Override the default token budget |
+| `TINYCONTEXT_ENCODING_NAME` | Override the tokenizer |
+| `TINYCONTEXT_MODELS_DIR` | Override the ONNX bundle directory |
+| `TINYCONTEXT_EMBEDDING_MODEL` | Override the embedding model |
+| `TINYCONTEXT_EMBEDDING_BATCH_SIZE` | Override inference batch size |
+| `TINYCONTEXT_RECALL_DENSE_WEIGHT` | Override the dense RRF weight |
+| `TINYCONTEXT_RECALL_RRF_K` | Override the RRF rank constant |
+| `TINYCONTEXT_DENSE_QUERY_PREFIX` | Override the dense query prefix |
+| `TINYCONTEXT_DENSE_DOCUMENT_PREFIX` | Override the dense document prefix |
+| `TINYCONTEXT_VERSION` | Set the FastAPI/container version |
 | `MCP_TRANSPORT` | `stdio`, `sse`, or `streamable-http` |
 | `MCP_HOST` | MCP HTTP bind host |
 | `MCP_PORT` | MCP HTTP bind port |
-| `MCP_CORS_ORIGINS` | CORS origins for browser MCP clients |
+| `MCP_CORS_ORIGINS` | Comma-separated CORS origins |
 
-## Docker
-
-Build locally:
+An existing checkout-local database remains usable:
 
 ```bash
-docker compose up -d --build
+TINYCONTEXT_MEMORY_DB_PATH=/absolute/path/to/TinyContext/data/memories.db tinycontext
 ```
 
-Optional FastAPI profile:
+## Development
 
 ```bash
-docker compose --profile fastapi up -d --build
-```
-
-## Tests
-
-```bash
+git clone https://github.com/TinySuiteHQ/TinyContext
+cd TinyContext
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[server]"
 python -m unittest discover tests
+python scripts/smoke_mcp_stdio.py
 ```
 
-## MCP client templates
+TinyContext supports Python 3.12 and newer. CI tests Python 3.12, 3.13, and
+3.14 across Linux, macOS, and Windows.
 
-Copy a template from [`mcp_templates/`](mcp_templates/) and update the absolute paths for stdio mode.
+Source-checkout compatibility shims remain available:
+
+```bash
+python servers/mcp_server.py
+uvicorn servers.fastapi_server:app --host 0.0.0.0 --port 8000
+```
+
+## Entrypoints
+
+- `tinycontext.save_memories` and `tinycontext.recall_memories`: Python API
+- `tinycontext` / `tinycontext mcp`: stdio MCP
+- `tinycontext serve`: Streamable HTTP MCP
+- `tinycontext doctor`: configuration and storage readiness
+- `tinycontext.servers.fastapi_server:app`: optional FastAPI application
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

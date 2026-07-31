@@ -1,10 +1,24 @@
-data/*.db
 .env
+.env.*
 .DS_Store
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.cache/
 venv/
 .venv/
+.venv*/
+
+# Local TinyContext data
+data/*
+!data/.gitkeep
+models/*
+!models/.gitkeep
+!models/README.md
+
+# Python packaging artifacts
+*.egg-info/
+dist/
+build/

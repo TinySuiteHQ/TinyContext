@@ -7,18 +7,20 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from servers.fastapi_server import (
+from tinycontext.servers.fastapi_server import (
     MemoryInputModel,
     RecallMemoriesRequest,
     SaveMemoriesRequest,
     recall_memories_endpoint,
     save_memories_endpoint,
 )
-from services.memory_store_service import close_connection
+from tinycontext.services.memory_store_service import close_connection
+from tests.embedding_fakes import start_fake_embeddings
 
 
 class FastApiMemoryEndpointTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
+        start_fake_embeddings(self)
         self._tmpdir = tempfile.TemporaryDirectory()
         self.config = {
             "memory_db_path": str(Path(self._tmpdir.name) / "memories.db"),
@@ -33,7 +35,7 @@ class FastApiMemoryEndpointTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_save_memories_endpoint(self) -> None:
         with patch(
-            "servers.fastapi_server.load_context_config",
+            "tinycontext.servers.fastapi_server.load_context_config",
             return_value=self.config,
         ):
             payload = await save_memories_endpoint(
@@ -46,7 +48,7 @@ class FastApiMemoryEndpointTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_recall_memories_endpoint(self) -> None:
         with patch(
-            "servers.fastapi_server.load_context_config",
+            "tinycontext.servers.fastapi_server.load_context_config",
             return_value=self.config,
         ):
             await save_memories_endpoint(
@@ -61,7 +63,7 @@ class FastApiMemoryEndpointTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_save_memories_maps_empty_memory_error(self) -> None:
         with patch(
-            "servers.fastapi_server.load_context_config",
+            "tinycontext.servers.fastapi_server.load_context_config",
             return_value=self.config,
         ):
             with self.assertRaises(HTTPException) as ctx:

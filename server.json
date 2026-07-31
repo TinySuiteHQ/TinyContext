@@ -1,0 +1,55 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.TinySuiteHQ/tinycontext",
+  "description": "Token-light local memory with SQLite hybrid retrieval for MCP agents.",
+  "version": "0.1.0",
+  "websiteUrl": "https://github.com/TinySuiteHQ/TinyContext",
+  "repository": {
+    "url": "https://github.com/TinySuiteHQ/TinyContext",
+    "source": "github",
+    "id": "1284842191"
+  },
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "docker.io/marcellm01/tinycontext:v0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "MCP_TRANSPORT",
+          "description": "MCP transport to serve: stdio (default), sse, or streamable-http.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "TINYCONTEXT_CONFIG_PATH",
+          "description": "Path to a context_config.json inside the container.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "TINYCONTEXT_MEMORY_DB_PATH",
+          "description": "Path to the TinyContext SQLite database.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "TINYCONTEXT_MODELS_DIR",
+          "description": "Directory used for downloaded ONNX embedding bundles.",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    },
+    {
+      "registryType": "pypi",
+      "identifier": "tinysuite-context",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

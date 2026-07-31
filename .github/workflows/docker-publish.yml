@@ -1,0 +1,118 @@
+name: Publish Docker image
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag to publish, for example v0.1.0"
+        required: true
+        type: string
+      publish_latest:
+        description: "Also publish marcellm01/tinycontext:latest"
+        required: true
+        default: true
+        type: boolean
+
+env:
+  IMAGE_NAME: marcellm01/tinycontext
+
+jobs:
+  docker:
+    name: Build and publish multi-arch image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set image version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set image tags
+        id: tags
+        env:
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          IMAGE_VERSION: ${{ steps.version.outputs.value }}
+          EVENT_NAME: ${{ github.event_name }}
+          PUBLISH_LATEST: ${{ github.event.inputs.publish_latest }}
+        run: |
+          {
+            echo "value<<EOF"
+            echo "${IMAGE_NAME}:${IMAGE_VERSION}"
+            if [ "${EVENT_NAME}" != "workflow_dispatch" ] || [ "${PUBLISH_LATEST}" = "true" ]; then
+              echo "${IMAGE_NAME}:latest"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build local image for vulnerability scan
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          build-args: |
+            TINYCONTEXT_VERSION=${{ steps.version.outputs.value }}
+          tags: ${{ env.IMAGE_NAME }}:scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:scan
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            TINYCONTEXT_VERSION=${{ steps.version.outputs.value }}
+          tags: ${{ steps.tags.outputs.value }}
+          labels: |
+            org.opencontainers.image.title=TinyContext MCP
+            org.opencontainers.image.description=TinyContext MCP stdio and HTTP server
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.version.outputs.value }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign published image (keyless)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: cosign sign --yes "${IMAGE_NAME}@${DIGEST}"

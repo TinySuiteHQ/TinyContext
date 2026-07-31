@@ -4,13 +4,20 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pipelines.memory_recall import memory_recall_run
-from services.memory_service import MemoryInput, save_memories
-from services.memory_store_service import close_connection
+from tinycontext import MemoryInput, save_memories
+from tinycontext.pipelines.memory_recall import memory_recall_run
+from tinycontext.services.memory_store_service import close_connection
+from tinycontext.services.memory_store_service import (
+    embedding_storage_stats,
+    insert_memories,
+)
+from tinycontext.models import MemoryRow
+from tests.embedding_fakes import start_fake_embeddings
 
 
 class MemoryRecallPipelineTests(unittest.TestCase):
     def setUp(self) -> None:
+        start_fake_embeddings(self)
         self._tmpdir = tempfile.TemporaryDirectory()
         self.config = {
             "memory_db_path": str(Path(self._tmpdir.name) / "memories.db"),
@@ -36,7 +43,8 @@ class MemoryRecallPipelineTests(unittest.TestCase):
             session_id=None,
             max_tokens=4,
             top_k=2,
-            config=self.config,
+            db_path=Path(self.config["memory_db_path"]),
+            encoding_name=self.config["encoding_name"],
         )
         self.assertTrue(payload["truncated"])
         self.assertLessEqual(payload["total_tokens"], 8)
@@ -47,7 +55,35 @@ class MemoryRecallPipelineTests(unittest.TestCase):
             session_id=None,
             max_tokens=100,
             top_k=5,
-            config=self.config,
+            db_path=Path(self.config["memory_db_path"]),
+            encoding_name=self.config["encoding_name"],
         )
         self.assertEqual(payload["memories"], [])
         self.assertEqual(payload["total_tokens"], 0)
+
+    def test_pipeline_backfills_embeddings_for_legacy_rows(self) -> None:
+        insert_memories(
+            Path(self.config["memory_db_path"]),
+            [
+                MemoryRow(
+                    id="legacy",
+                    session_id=None,
+                    content="legacy sqlite memory",
+                    tags=[],
+                    metadata={},
+                    created_at="2026-01-01T00:00:00Z",
+                )
+            ],
+        )
+        memory_recall_run(
+            "database",
+            session_id=None,
+            max_tokens=100,
+            top_k=5,
+            db_path=Path(self.config["memory_db_path"]),
+            encoding_name=self.config["encoding_name"],
+        )
+        self.assertEqual(
+            embedding_storage_stats(Path(self.config["memory_db_path"])),
+            {"total": 1, "embedded": 1},
+        )

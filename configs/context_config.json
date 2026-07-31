@@ -1,6 +1,13 @@
 {
-  "memory_db_path": "data/memories.db",
+  "memory_db_path": "../data/memories.db",
   "recall_top_k": 10,
   "recall_max_tokens": 2000,
-  "encoding_name": "o200k_base"
+  "encoding_name": "o200k_base",
+  "models_dir": "../models",
+  "embedding_model": "fast",
+  "embedding_batch_size": 32,
+  "recall_dense_weight": 0.5,
+  "recall_rrf_k": 60,
+  "dense_query_prefix": "",
+  "dense_document_prefix": ""
 }

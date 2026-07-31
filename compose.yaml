@@ -1,8 +1,7 @@
 services:
-  mcp:
+  tinycontext:
     build:
       context: .
-      target: mcp
       args:
         TINYCONTEXT_VERSION: local
     image: tinycontext:local
@@ -14,6 +13,7 @@ services:
     environment:
       TINYCONTEXT_CONFIG_PATH: /config/context_config.json
       TINYCONTEXT_MEMORY_DB_PATH: /data/memories.db
+      TINYCONTEXT_MODELS_DIR: /data/models
       MCP_TRANSPORT: streamable-http
       MCP_HOST: 0.0.0.0
       MCP_PORT: 8000
@@ -21,10 +21,18 @@ services:
   fastapi:
     build:
       context: .
-      target: fastapi
       args:
         TINYCONTEXT_VERSION: local
-    image: tinycontext-fastapi:local
+    image: tinycontext:local
+    command:
+      [
+        "uvicorn",
+        "tinycontext.servers.fastapi_server:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+      ]
     profiles:
       - fastapi
     ports:
@@ -35,6 +43,7 @@ services:
     environment:
       TINYCONTEXT_CONFIG_PATH: /config/context_config.json
       TINYCONTEXT_MEMORY_DB_PATH: /data/memories.db
+      TINYCONTEXT_MODELS_DIR: /data/models
 
 volumes:
   tinycontext-data:
