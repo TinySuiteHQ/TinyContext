@@ -25,7 +25,8 @@ RUN apt-get update \
 COPY . .
 
 RUN pip install --upgrade pip \
-    && pip install ".[server]" \
+    && pip install ".[server]" "msgpack>=1.2.1" "setuptools>=78.1.1" \
+    && pip check \
     && useradd --create-home --shell /usr/sbin/nologin tinycontext \
     && mkdir -p /data/models \
     && chown -R tinycontext:tinycontext /data \
