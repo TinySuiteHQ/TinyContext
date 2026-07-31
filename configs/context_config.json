@@ -6,6 +6,7 @@
   "models_dir": "../models",
   "embedding_model": "fast",
   "embedding_batch_size": 32,
+  "recall_rrf_cutoff": 0.05,
   "recall_dense_weight": 0.5,
   "recall_rrf_k": 60,
   "dense_query_prefix": "",

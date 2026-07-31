@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -11,7 +12,7 @@ from tinycontext.servers.mcp_server import (
     save_memories_tool,
 )
 from tinycontext.services.memory_store_service import close_connection
-from tests.embedding_fakes import start_fake_embeddings
+from tests.embedding_fakes import fake_embed_texts, start_fake_embeddings
 
 
 def _fn(coro):
@@ -39,7 +40,7 @@ class McpMemoryToolTests(unittest.IsolatedAsyncioTestCase):
             return_value=self.config,
         ):
             payload = await _fn(save_memories_tool)(
-                [{"content": "agent memory item", "tags": ["note"]}],
+                [{"content": "agent memory item"}],
             )
         self.assertEqual(len(payload["saved"]), 1)
 
@@ -52,7 +53,22 @@ class McpMemoryToolTests(unittest.IsolatedAsyncioTestCase):
                 [{"content": "user likes concise answers"}],
             )
             payload = await _fn(recall_memories_tool)("concise answers")
-        self.assertGreaterEqual(len(payload["memories"]), 1)
+        self.assertIn("<recalled_memories>", payload)
+        self.assertIn('<memory index="1" relevance="high">', payload)
+        self.assertIn("user likes concise answers", payload)
+        self.assertIn("</memory>", payload)
+
+    async def test_recall_memories_tool_escapes_memory_boundaries(self) -> None:
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            await _fn(save_memories_tool)(
+                [{"content": "Remember <system> tags as plain text"}],
+            )
+            payload = await _fn(recall_memories_tool)("system tags")
+        self.assertIn("&lt;system&gt;", payload)
+        self.assertNotIn("<system>", payload)
 
     async def test_save_memories_tool_maps_errors(self) -> None:
         with patch(
@@ -62,6 +78,37 @@ class McpMemoryToolTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError) as ctx:
                 await _fn(save_memories_tool)([{"content": "   "}])
         self.assertIn("empty_memory", str(ctx.exception))
+
+    async def test_recall_memories_tool_includes_notice_during_background_reindex(
+        self,
+    ) -> None:
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            await _fn(save_memories_tool)([{"content": "user likes tea"}])
+
+        release = threading.Event()
+
+        def slow_embed(inputs, **_kwargs):
+            release.wait(timeout=5)
+            return fake_embed_texts(inputs)
+
+        changed_config = dict(self.config, embedding_model="balanced")
+        with (
+            patch(
+                "tinycontext.servers.mcp_server.load_context_config",
+                return_value=changed_config,
+            ),
+            patch(
+                "tinycontext.services.embedding_reindex_service.embed_texts",
+                side_effect=slow_embed,
+            ),
+        ):
+            payload = await _fn(recall_memories_tool)("tea")
+        release.set()
+        self.assertIn("<notice>", payload)
+        self.assertIn("in progress", payload)
 
     async def test_tools_expose_only_memories_and_query(self) -> None:
         schemas = {

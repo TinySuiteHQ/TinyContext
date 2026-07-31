@@ -7,6 +7,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
+from tinycontext.core import describe_embedding_drift
 from tinycontext.services.context_config_service import (
     load_context_config,
     resolve_context_config_path,
@@ -76,6 +77,11 @@ def run() -> int:
         _log("model bundle: ready")
     else:
         _log("model bundle: not downloaded; first server start or API use will fetch it")
+    drift_warning = describe_embedding_drift(config)
+    if drift_warning:
+        _log(f"embedding drift: WARNING - {drift_warning}")
+    else:
+        _log("embedding drift: none")
     checks = [
         ("data directory", *_check_writable_directory(db_path.parent)),
         ("sqlite", *_check_sqlite()),

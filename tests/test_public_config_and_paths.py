@@ -24,6 +24,7 @@ class PublicConfigTests(unittest.TestCase):
             native_memory_db_path().resolve(),
         )
         self.assertEqual(config["recall_top_k"], 10)
+        self.assertEqual(config["recall_rrf_cutoff"], 0.0)
         json.dumps(config.to_dict())
 
     def test_explicit_file_resolves_database_relative_to_config(self) -> None:
@@ -81,6 +82,8 @@ class PublicConfigTests(unittest.TestCase):
             TinyContextConfig(encoding_name=" ")
         with self.assertRaisesRegex(ValueError, "recall_dense_weight"):
             TinyContextConfig(recall_dense_weight=1.1)
+        with self.assertRaisesRegex(ValueError, "recall_rrf_cutoff"):
+            TinyContextConfig(recall_rrf_cutoff=1.1)
 
 
 class ServerConfigTests(unittest.TestCase):
@@ -109,6 +112,7 @@ class ServerConfigTests(unittest.TestCase):
                     "TINYCONTEXT_ENCODING_NAME": "cl100k_base",
                     "TINYCONTEXT_MODELS_DIR": str(Path(temp_dir) / "models"),
                     "TINYCONTEXT_EMBEDDING_MODEL": "balanced",
+                    "TINYCONTEXT_RECALL_RRF_CUTOFF": "0.8",
                     "TINYCONTEXT_RECALL_DENSE_WEIGHT": "0.75",
                     "TINYCONTEXT_DENSE_QUERY_PREFIX": "query: ",
                 },
@@ -124,6 +128,7 @@ class ServerConfigTests(unittest.TestCase):
             os.path.normcase(str(Path(temp_dir) / "models")),
         )
         self.assertEqual(config["embedding_model"], "balanced")
+        self.assertEqual(config["recall_rrf_cutoff"], 0.8)
         self.assertEqual(config["recall_dense_weight"], 0.75)
         self.assertEqual(config["dense_query_prefix"], "query: ")
 

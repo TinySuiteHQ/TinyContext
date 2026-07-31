@@ -21,6 +21,7 @@ def default_config() -> dict[str, Any]:
         "models_dir": str(native_models_dir()),
         "embedding_model": "fast",
         "embedding_batch_size": 32,
+        "recall_rrf_cutoff": 0.0,
         "recall_dense_weight": 0.5,
         "recall_rrf_k": 60,
         "dense_query_prefix": "",
@@ -87,6 +88,14 @@ def normalize_config(
     if dense_weight <= 0.0 or dense_weight > 1.0:
         raise ValueError("recall_dense_weight must be greater than 0 and at most 1")
     config["recall_dense_weight"] = dense_weight
+
+    try:
+        rrf_cutoff = float(config["recall_rrf_cutoff"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("recall_rrf_cutoff must be a number") from exc
+    if rrf_cutoff < 0.0 or rrf_cutoff > 1.0:
+        raise ValueError("recall_rrf_cutoff must be between 0 and 1")
+    config["recall_rrf_cutoff"] = rrf_cutoff
 
     try:
         rrf_k = int(config["recall_rrf_k"])

@@ -18,8 +18,30 @@ from tinycontext.services.memory_store_service import (
 from tinycontext.services.token_counter_service import token_count
 
 
+_HIGH_RELEVANCE_THRESHOLD = 0.90
+_MEDIUM_RELEVANCE_THRESHOLD = 0.75
+
+
 def _tokenize(text: str) -> list[str]:
     return [token for token in re.findall(r"[A-Za-z0-9_]+", text.lower()) if token]
+
+
+def _rank_by_score(scores: list[float]) -> dict[int, int]:
+    return {
+        index: rank
+        for rank, index in enumerate(
+            sorted(range(len(scores)), key=lambda item: scores[item], reverse=True),
+            start=1,
+        )
+    }
+
+
+def _relevance_label(rrf_similarity: float) -> str:
+    if rrf_similarity >= _HIGH_RELEVANCE_THRESHOLD:
+        return "high"
+    if rrf_similarity >= _MEDIUM_RELEVANCE_THRESHOLD:
+        return "medium"
+    return "low"
 
 
 def memory_recall_run(
@@ -33,10 +55,12 @@ def memory_recall_run(
     models_dir: Path | None = None,
     embedding_model: str = "fast",
     embedding_batch_size: int = 32,
+    rrf_similarity_cutoff: float | None = None,
     dense_weight: float = 0.5,
     rrf_k: int = 60,
     query_prefix: str = "",
     document_prefix: str = "",
+    skip_stale_backfill: bool = False,
 ) -> dict[str, Any]:
     if session_id is not None and not session_exists(db_path, session_id):
         raise SessionNotFoundError(f"session not found: {session_id}")
@@ -67,7 +91,7 @@ def memory_recall_run(
         if row.embedding_model != model_key
         or row.embedding_dimensions != len(query_embedding)
     ]
-    if stale:
+    if stale and not skip_stale_backfill:
         document_embeddings = embed_texts(
             [document_prefix + row.content for row in stale],
             embedding_model=embedding_model,
@@ -92,70 +116,69 @@ def memory_recall_run(
     query_tokens = _tokenize(query)
     corpus = [_tokenize(row.content) for row in candidates]
     if query_tokens and any(corpus):
-        bm25_values = BM25Okapi(corpus).get_scores(query_tokens)
-        lexical = sorted(
-            (
-                (row, score)
-                for row, tokens, score in zip(
-                    candidates,
-                    corpus,
-                    bm25_values,
-                    strict=True,
-                )
-                if set(tokens).intersection(query_tokens)
-            ),
-            key=lambda item: item[1],
-            reverse=True,
-        )
+        bm25_scores = [
+            float(score) for score in BM25Okapi(corpus).get_scores(query_tokens)
+        ]
     else:
-        lexical = []
+        bm25_scores = [0.0 for _row in candidates]
 
-    lexical_ranks = {
-        row.id: rank
-        for rank, (row, _score) in enumerate(lexical, start=1)
-    }
-    dense_ranks = {
-        memory_id: rank
-        for rank, (memory_id, _score) in enumerate(
-            sorted(
-                dense_scores.items(),
-                key=lambda item: item[1],
-                reverse=True,
-            ),
-            start=1,
+    dense_values = [float(dense_scores.get(row.id, 0.0)) for row in candidates]
+    bm25_ranks = _rank_by_score(bm25_scores)
+    dense_ranks = _rank_by_score(dense_values)
+    sparse_weight = 1.0 - dense_weight
+    max_rrf_score = (sparse_weight + dense_weight) / (rrf_k + 1)
+    fused: list[tuple[MemoryRow, dict[str, float | int | str]]] = []
+    for index, row in enumerate(candidates):
+        bm25_rank = bm25_ranks[index]
+        dense_rank = dense_ranks[index]
+        rrf_score = (
+            sparse_weight / (rrf_k + bm25_rank)
+            + dense_weight / (rrf_k + dense_rank)
         )
-    }
-    lexical_weight = 1.0 - dense_weight
-    fused: list[tuple[MemoryRow, float]] = []
-    for row in candidates:
-        score = 0.0
-        lexical_rank = lexical_ranks.get(row.id)
-        if lexical_rank is not None:
-            score += lexical_weight / (rrf_k + lexical_rank)
-        dense_rank = dense_ranks.get(row.id)
-        if dense_rank is not None:
-            score += dense_weight / (rrf_k + dense_rank)
-        fused.append((row, score))
+        rrf_similarity = rrf_score / max_rrf_score if max_rrf_score else 0.0
+        if (
+            rrf_similarity_cutoff is not None
+            and rrf_similarity < rrf_similarity_cutoff
+        ):
+            continue
+        fused.append(
+            (
+                row,
+                {
+                    "bm25_score": bm25_scores[index],
+                    "bm25_rank": bm25_rank,
+                    "dense_score": dense_values[index],
+                    "dense_rank": dense_rank,
+                    "rrf_score": rrf_score,
+                    "rrf_similarity": rrf_similarity,
+                    "relevance": _relevance_label(rrf_similarity),
+                },
+            )
+        )
     ranked = sorted(
         fused,
-        key=lambda item: item[1],
+        key=lambda item: (
+            item[1]["rrf_score"],
+            item[1]["dense_score"],
+            item[1]["bm25_score"],
+        ),
         reverse=True,
     )[:top_k]
 
     selected: list[dict[str, Any]] = []
     total_tokens = 0
     truncated = False
-    for row, score in ranked:
+    for rank, (row, scores) in enumerate(ranked, start=1):
         content_tokens = token_count(row.content, encoding_name)
         if selected and total_tokens + content_tokens > max_tokens:
             truncated = True
             break
         if not selected and content_tokens > max_tokens:
             truncated = True
-            selected.append(_memory_payload(row, score, content_tokens))
+            selected.append(_memory_payload(row, rank, scores, content_tokens))
             total_tokens = content_tokens
             break
-        selected.append(_memory_payload(row, score, content_tokens))
+        selected.append(_memory_payload(row, rank, scores, content_tokens))
         total_tokens += content_tokens
 
     return {
@@ -166,13 +189,22 @@ def memory_recall_run(
     }
 
 
-def _memory_payload(row: MemoryRow, score: float, content_tokens: int) -> dict[str, Any]:
+def _memory_payload(
+    row: MemoryRow,
+    rank: int,
+    retrieval: dict[str, float | int | str],
+    content_tokens: int,
+) -> dict[str, Any]:
     return {
         "id": row.id,
         "content": row.content,
-        "score": float(score),
+        "rank": rank,
+        "relevance": str(retrieval["relevance"]),
+        "scores": {
+            "rrf": float(retrieval["rrf_similarity"]),
+            "dense": float(retrieval["dense_score"]),
+            "bm25": float(retrieval["bm25_score"]),
+        },
         "content_tokens": content_tokens,
-        "tags": row.tags,
-        "metadata": row.metadata,
         "created_at": row.created_at,
     }

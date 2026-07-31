@@ -33,6 +33,7 @@ def _environment_overrides() -> dict[str, Any]:
         ("TINYCONTEXT_MODELS_DIR", "models_dir"),
         ("TINYCONTEXT_EMBEDDING_MODEL", "embedding_model"),
         ("TINYCONTEXT_EMBEDDING_BATCH_SIZE", "embedding_batch_size"),
+        ("TINYCONTEXT_RECALL_RRF_CUTOFF", "recall_rrf_cutoff"),
         ("TINYCONTEXT_RECALL_DENSE_WEIGHT", "recall_dense_weight"),
         ("TINYCONTEXT_RECALL_RRF_K", "recall_rrf_k"),
         ("TINYCONTEXT_DENSE_QUERY_PREFIX", "dense_query_prefix"),

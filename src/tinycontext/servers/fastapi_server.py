@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -34,12 +35,13 @@ async def _prepare_embedding_model() -> None:
         str(config["embedding_model"]),
         models_dir=str(config["models_dir"]),
     )
+    notice = await asyncio.to_thread(core.start_background_reembed_if_needed, config)
+    if notice:
+        print(f"[tinycontext] {notice}", file=sys.stderr, flush=True)
 
 
 class MemoryInputModel(BaseModel):
     content: str = Field(..., min_length=1)
-    tags: list[str] | None = None
-    metadata: dict[str, Any] | None = None
 
 
 class SaveMemoriesRequest(BaseModel):
@@ -69,14 +71,7 @@ def _raise_memory_http_error(exc: Exception) -> None:
 
 
 def _to_memory_inputs(items: list[MemoryInputModel]) -> list[MemoryInput]:
-    return [
-        MemoryInput(
-            content=item.content,
-            tags=item.tags,
-            metadata=item.metadata,
-        )
-        for item in items
-    ]
+    return [MemoryInput(content=item.content) for item in items]
 
 
 @app.get("/health")

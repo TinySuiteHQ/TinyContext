@@ -38,6 +38,7 @@ def start_fake_embeddings(test_case: Any) -> None:
     for target in (
         "tinycontext.core.embed_texts",
         "tinycontext.pipelines.memory_recall.embed_texts",
+        "tinycontext.services.embedding_reindex_service.embed_texts",
     ):
         patcher = patch(target, side_effect=fake_embed_texts)
         patcher.start()

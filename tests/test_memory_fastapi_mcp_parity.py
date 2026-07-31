@@ -38,7 +38,7 @@ class MemoryFastApiMcpParityTests(unittest.IsolatedAsyncioTestCase):
         self._tmpdir.cleanup()
 
     async def test_save_memories_parity(self) -> None:
-        memories = [{"content": "parity save memory", "tags": ["test"]}]
+        memories = [{"content": "parity save memory"}]
         with patch(
             "tinycontext.servers.fastapi_server.load_context_config",
             return_value=self.config,
@@ -59,7 +59,7 @@ class MemoryFastApiMcpParityTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(fastapi_payload["saved"]), len(mcp_payload["saved"]))
 
-    async def test_recall_memories_parity(self) -> None:
+    async def test_recall_memories_adapters_share_recalled_content(self) -> None:
         save_memories(
             [MemoryInput(content="memory about sqlite storage")],
             config=self.config,
@@ -76,16 +76,9 @@ class MemoryFastApiMcpParityTests(unittest.IsolatedAsyncioTestCase):
             return_value=self.config,
         ):
             mcp_payload = await _fn(recall_memories_tool)("sqlite")
-        self.assertEqual(fastapi_payload["query"], mcp_payload["query"])
-        self.assertEqual(
-            fastapi_payload["total_tokens"],
-            mcp_payload["total_tokens"],
-        )
-        self.assertEqual(
-            fastapi_payload["truncated"],
-            mcp_payload["truncated"],
-        )
-        self.assertEqual(
-            len(fastapi_payload["memories"]),
-            len(mcp_payload["memories"]),
+        self.assertEqual(len(fastapi_payload["memories"]), 1)
+        self.assertIn(fastapi_payload["memories"][0]["content"], mcp_payload)
+        self.assertIn(
+            f'relevance="{fastapi_payload["memories"][0]["relevance"]}"',
+            mcp_payload,
         )

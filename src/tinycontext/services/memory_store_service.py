@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import math
 import os
 import sqlite3
@@ -20,8 +19,6 @@ CREATE TABLE IF NOT EXISTS memories (
   id TEXT PRIMARY KEY,
   session_id TEXT,
   content TEXT NOT NULL,
-  tags TEXT,
-  metadata TEXT,
   created_at TEXT NOT NULL,
   embedding BLOB,
   embedding_model TEXT,
@@ -174,22 +171,18 @@ def insert_memories(db_path: Path, rows: list[MemoryRow]) -> None:
               id,
               session_id,
               content,
-              tags,
-              metadata,
               created_at,
               embedding,
               embedding_model,
               embedding_dimensions
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
                     row.id,
                     row.session_id,
                     row.content,
-                    json.dumps(row.tags),
-                    json.dumps(row.metadata),
                     row.created_at,
                     (
                         sqlite_vec.serialize_float32(row.embedding)
@@ -213,20 +206,10 @@ def insert_memories(db_path: Path, rows: list[MemoryRow]) -> None:
 
 
 def _row_to_memory(row: sqlite3.Row) -> MemoryRow:
-    tags_raw = row["tags"]
-    metadata_raw = row["metadata"]
-    tags = json.loads(tags_raw) if tags_raw else []
-    metadata = json.loads(metadata_raw) if metadata_raw else {}
-    if not isinstance(tags, list):
-        tags = []
-    if not isinstance(metadata, dict):
-        metadata = {}
     return MemoryRow(
         id=str(row["id"]),
         session_id=row["session_id"],
         content=str(row["content"]),
-        tags=[str(tag) for tag in tags],
-        metadata=metadata,
         created_at=str(row["created_at"]),
         embedding_model=row["embedding_model"],
         embedding_dimensions=row["embedding_dimensions"],
@@ -245,8 +228,6 @@ def fetch_candidates(
           id,
           session_id,
           content,
-          tags,
-          metadata,
           created_at,
           embedding_model,
           embedding_dimensions
@@ -352,6 +333,27 @@ def embedding_storage_stats(db_path: Path) -> dict[str, int]:
         }
 
     return _pool.execute(db_path, _stats)
+
+
+def embedding_model_mismatch_count(db_path: Path, current_embedding_model: str) -> int:
+    """Count rows embedded under a different model key than ``current_embedding_model``.
+
+    These rows get re-embedded synchronously, inline, the next time a recall
+    touches them (see ``memory_recall_run``'s stale-row backfill) -- which can
+    stall a recall call for a large memory store.
+    """
+    def _count(conn: sqlite3.Connection) -> int:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS mismatched
+            FROM memories
+            WHERE embedding_model IS NULL OR embedding_model != ?
+            """,
+            (current_embedding_model,),
+        ).fetchone()
+        return int(row["mismatched"])
+
+    return _pool.execute(db_path, _count)
 
 
 def sqlite_vec_version() -> str:

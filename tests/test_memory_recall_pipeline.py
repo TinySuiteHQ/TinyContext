@@ -69,8 +69,6 @@ class MemoryRecallPipelineTests(unittest.TestCase):
                     id="legacy",
                     session_id=None,
                     content="legacy sqlite memory",
-                    tags=[],
-                    metadata={},
                     created_at="2026-01-01T00:00:00Z",
                 )
             ],
@@ -87,3 +85,25 @@ class MemoryRecallPipelineTests(unittest.TestCase):
             embedding_storage_stats(Path(self.config["memory_db_path"])),
             {"total": 1, "embedded": 1},
         )
+
+    def test_pipeline_applies_normalized_rrf_cutoff_before_top_k(self) -> None:
+        save_memories(
+            [
+                MemoryInput(content="Python backend FastAPI preference"),
+                MemoryInput(content="Hiking outside on weekends"),
+                MemoryInput(content="Quarterly finance spreadsheet"),
+            ],
+            config=self.config,
+        )
+        payload = memory_recall_run(
+            "Python backend",
+            session_id=None,
+            max_tokens=100,
+            top_k=3,
+            db_path=Path(self.config["memory_db_path"]),
+            encoding_name=self.config["encoding_name"],
+            rrf_similarity_cutoff=0.99,
+        )
+        self.assertEqual(len(payload["memories"]), 1)
+        self.assertIn("Python", payload["memories"][0]["content"])
+        self.assertEqual(payload["memories"][0]["scores"]["rrf"], 1.0)

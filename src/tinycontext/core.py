@@ -11,9 +11,31 @@ from tinycontext.config import ConfigInput, resolve_config
 from tinycontext.errors import EmptyMemoryError, RecallBudgetError
 from tinycontext.models import MemoryInput, MemoryRow
 from tinycontext.pipelines.memory_recall import memory_recall_run
+from tinycontext.services.embedding_reindex_service import (
+    ensure_background_reindex,
+    reindex_notice,
+)
 from tinycontext.services.embedding_service import embed_texts, embedding_model_key
-from tinycontext.services.memory_store_service import insert_memories
+from tinycontext.services.memory_store_service import (
+    embedding_model_mismatch_count,
+    embedding_storage_stats,
+    insert_memories,
+)
 from tinycontext.services.token_counter_service import token_count
+
+
+def _kick_off_background_reindex(resolved: dict[str, Any], db_path: Path) -> str | None:
+    """Start a background re-embed if the store has drifted; return a notice if so."""
+    if not db_path.exists():
+        return None
+    ensure_background_reindex(
+        db_path,
+        embedding_model=str(resolved["embedding_model"]),
+        models_dir=Path(str(resolved["models_dir"])),
+        embedding_batch_size=int(resolved["embedding_batch_size"]),
+        document_prefix=str(resolved["dense_document_prefix"]),
+    )
+    return reindex_notice(db_path)
 
 
 def _utc_now_iso() -> str:
@@ -37,6 +59,7 @@ def save_memories(
 
     resolved = _resolved_values(config)
     db_path = Path(str(resolved["memory_db_path"]))
+    notice = _kick_off_background_reindex(resolved, db_path)
     encoding_name = str(resolved["encoding_name"])
     contents: list[str] = []
     normalized_items: list[tuple[MemoryInput, str]] = []
@@ -63,15 +86,11 @@ def save_memories(
     for (item, content), vector in zip(normalized_items, vectors, strict=True):
         memory_id = str(uuid.uuid4())
         created_at = _utc_now_iso()
-        tags = list(item.tags or [])
-        metadata = dict(item.metadata or {})
         rows.append(
             MemoryRow(
                 id=memory_id,
                 session_id=session_id,
                 content=content,
-                tags=tags,
-                metadata=metadata,
                 created_at=created_at,
                 embedding=vector,
                 embedding_model=model_key,
@@ -87,7 +106,10 @@ def save_memories(
             }
         )
     insert_memories(db_path, rows)
-    return {"saved": saved}
+    result: dict[str, Any] = {"saved": saved}
+    if notice:
+        result["notice"] = notice
+    return result
 
 
 def recall_memories(
@@ -107,18 +129,65 @@ def recall_memories(
         raise RecallBudgetError("top_k must be at least 1")
 
     resolved = _resolved_values(config)
-    return memory_recall_run(
+    db_path = Path(str(resolved["memory_db_path"]))
+    notice = _kick_off_background_reindex(resolved, db_path)
+    result = memory_recall_run(
         query=query,
         session_id=session_id,
         max_tokens=max_tokens or int(resolved["recall_max_tokens"]),
         top_k=top_k or int(resolved["recall_top_k"]),
-        db_path=Path(str(resolved["memory_db_path"])),
+        db_path=db_path,
         encoding_name=str(resolved["encoding_name"]),
         models_dir=Path(str(resolved["models_dir"])),
         embedding_model=str(resolved["embedding_model"]),
         embedding_batch_size=int(resolved["embedding_batch_size"]),
+        rrf_similarity_cutoff=float(resolved["recall_rrf_cutoff"]),
         dense_weight=float(resolved["recall_dense_weight"]),
         rrf_k=int(resolved["recall_rrf_k"]),
         query_prefix=str(resolved["dense_query_prefix"]),
         document_prefix=str(resolved["dense_document_prefix"]),
+        skip_stale_backfill=notice is not None,
+    )
+    if notice:
+        result["notice"] = notice
+    return result
+
+
+def start_background_reembed_if_needed(config: ConfigInput | None = None) -> str | None:
+    """Kick off a background re-embed if the store has drifted. For server startup."""
+    resolved = _resolved_values(config)
+    db_path = Path(str(resolved["memory_db_path"]))
+    return _kick_off_background_reindex(resolved, db_path)
+
+
+def describe_embedding_drift(config: ConfigInput | None = None) -> str | None:
+    """Report whether stored memories don't match the currently configured embedding model.
+
+    This is a read-only diagnostic for callers (like ``doctor``) that don't
+    otherwise touch the store. ``save_memories``/``recall_memories`` detect
+    and fix this themselves by starting a background re-embed job (see
+    ``embedding_reindex_service``) and surfacing a ``notice`` in their
+    response while it runs. Returns None when there's nothing to warn about,
+    including when the database doesn't exist yet (nothing has been saved).
+    """
+    resolved = _resolved_values(config)
+    db_path = Path(str(resolved["memory_db_path"]))
+    if not db_path.exists():
+        return None
+
+    model_key = embedding_model_key(
+        str(resolved["embedding_model"]),
+        models_dir=Path(str(resolved["models_dir"])),
+        document_prefix=str(resolved["dense_document_prefix"]),
+    )
+    mismatched = embedding_model_mismatch_count(db_path, model_key)
+    if mismatched <= 0:
+        return None
+
+    total = embedding_storage_stats(db_path)["total"]
+    return (
+        f"{mismatched} of {total} stored memories were embedded with a different "
+        f"model/config than is currently set (embedding_model={resolved['embedding_model']!r}). "
+        "They will be re-embedded synchronously, inline, the next time recall_memories "
+        "fetches them -- this can be slow for a large memory store."
     )
