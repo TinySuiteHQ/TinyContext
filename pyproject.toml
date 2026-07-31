@@ -32,7 +32,7 @@ dependencies = [
 [project.optional-dependencies]
 server = [
     "fastapi==0.136.1",
-    "uvicorn==0.46.0",
+    "uvicorn==0.51.0",
     "mcp==1.28.1",
 ]
 
