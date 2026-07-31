@@ -22,3 +22,8 @@ models/*
 *.egg-info/
 dist/
 build/
+
+#benchmark outputs
+\benchmark_index_recall_speed.latest.json
+\benchmark_recall_accuracy.latest.json
+\benchmark_token_savings.latest.json

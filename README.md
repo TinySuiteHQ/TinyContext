@@ -205,6 +205,63 @@ Existing TinyContext databases are upgraded in place with nullable embedding
 columns. The first recall backfills embeddings for legacy rows; no database
 migration command or separate vector service is required.
 
+## Benchmarks
+
+Numbers below come from `scripts/benchmark_index_recall_speed.py` and
+`scripts/benchmark_token_savings.py`, run against an isolated, throwaway
+SQLite store (never a real database) with the default `fast` ONNX embedding
+model. Reproduce them yourself:
+
+```bash
+python scripts/benchmark_index_recall_speed.py --json-out speed.json
+python scripts/benchmark_token_savings.py --json-out savings.json
+python scripts/benchmark_recall_accuracy.py --json-out accuracy.json
+```
+
+### Write throughput and recall latency
+
+| Corpus size | Write throughput | Recall p50 | Recall p95 |
+| --- | --- | --- | --- |
+| 100 | 32.0 mem/s | 55.4ms | 131.1ms |
+| 500 | 52.5 mem/s | 27.7ms | 30.2ms |
+| 2,000 | 30.9 mem/s | 113.8ms | 238.0ms |
+| 5,000 | 52.3 mem/s | 146.4ms | 182.6ms |
+
+Recall latency trends upward with corpus size — recall scans candidates
+rather than using an ANN index, so it's not flat past a few thousand
+memories. Write throughput holds steady regardless of corpus size.
+
+### Token savings vs. a naive "resend everything" agent
+
+Against 300 synthetic memories and 8 queries: **96.7% fewer tokens** than
+concatenating every stored memory raw, or roughly **$16.42 saved per 1,000
+recalls** at $3/MTok input pricing (Claude Sonnet 5).
+
+### How this compares to the market
+
+Published numbers from [Mem0](https://mem0.ai/research) (~90%+ token
+reduction, ~200ms p95 latency) and [Zep](https://blog.getzep.com/lies-damn-lies-statistics-is-mem0-really-sota-in-agent-memory/)
+(~65–200ms p95 latency) put TinyContext at or ahead on token compaction, and
+competitive on latency at the corpus sizes tested here. That's not an
+apples-to-apples claim, though — those figures come from real conversational
+benchmarks (LoCoMo, LongMemEval) with retrieval-accuracy grading in the loop,
+run at larger scale than tested above.
+
+### Retrieval accuracy — an open question, not a claim
+
+`scripts/benchmark_recall_accuracy.py` plants 15 distinct facts inside a
+growing pool of filler memories and queries each with a paraphrase, checking
+whether hybrid recall returns the right memory id. Locally this comes back
+at **100% recall@k and MRR 1.00** from 100 up to 5,000 filler memories — but
+the planted facts are semantically distinct from the filler, so this mostly
+shows the mechanism works, not that it holds up against confusable,
+near-duplicate memories or a real labeled benchmark like LoCoMo/LongMemEval.
+
+**This is the one number here we're not standing behind as-is.** If you run
+a harder or larger-scale accuracy eval against TinyContext — adversarial
+near-duplicates, a real conversational dataset, whatever — we'd genuinely
+like to see it, good or bad. Open an issue or a PR with what you found.
+
 ## FastAPI
 
 The optional HTTP API mirrors the two MCP tools.
