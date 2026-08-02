@@ -37,6 +37,8 @@ EXPOSE 8000
 VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD tinycontext doctor || exit 1
-USER tinycontext
+
+# No USER on purpose: docker-entrypoint.sh needs root to re-own a bind-mounted
+# /data before it drops to tinycontext via gosu. See .trivyignore.yaml.
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["tinycontext", "mcp"]

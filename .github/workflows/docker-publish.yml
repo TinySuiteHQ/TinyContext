@@ -74,6 +74,19 @@ jobs:
         with:
           scan-type: config
           scan-ref: Dockerfile
+          scanners: misconfig
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          trivyignores: .trivyignore.yaml
+
+      - name: Scan repository for secrets
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: secret
+          skip-dirs: .venv
           format: table
           severity: CRITICAL,HIGH
           exit-code: "1"
