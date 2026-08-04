@@ -61,7 +61,9 @@ def _run(
     db_path: Path,
     *,
     embedding_model: str,
+    embedding_backend: str,
     models_dir: Path,
+    openai_env_file: str | None,
     embedding_batch_size: int,
     document_prefix: str,
     model_key: str,
@@ -83,7 +85,9 @@ def _run(
             vectors = embed_texts(
                 [document_prefix + row.content for row in batch],
                 embedding_model=embedding_model,
+                backend=embedding_backend,
                 models_dir=models_dir,
+                openai_env_file=openai_env_file,
                 batch_size=embedding_batch_size,
             )
             update_memory_embeddings(
@@ -114,14 +118,18 @@ def ensure_background_reindex(
     db_path: Path,
     *,
     embedding_model: str,
+    embedding_backend: str = "onnx",
     models_dir: Path,
+    openai_env_file: str | None = None,
     embedding_batch_size: int,
     document_prefix: str,
 ) -> None:
     """Start a background re-embed job if the store has drifted and none is running."""
     model_key = embedding_model_key(
         embedding_model,
+        backend=embedding_backend,
         models_dir=models_dir,
+        openai_env_file=openai_env_file,
         document_prefix=document_prefix,
     )
     key = _job_key(db_path)
@@ -147,7 +155,9 @@ def ensure_background_reindex(
             args=(key, db_path),
             kwargs=dict(
                 embedding_model=embedding_model,
+                embedding_backend=embedding_backend,
                 models_dir=models_dir,
+                openai_env_file=openai_env_file,
                 embedding_batch_size=embedding_batch_size,
                 document_prefix=document_prefix,
                 model_key=model_key,

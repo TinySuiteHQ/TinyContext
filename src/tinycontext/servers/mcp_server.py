@@ -300,13 +300,15 @@ async def recall_memories_tool(
 
 
 def main() -> None:
+    from tinycontext.services.embedding_service import normalize_embedding_backend
     from tinycontext.services.onnx_bundle_service import ensure_onnx_bundle_sync
 
     config = load_context_config()
-    ensure_onnx_bundle_sync(
-        str(config["embedding_model"]),
-        models_dir=str(config["models_dir"]),
-    )
+    if normalize_embedding_backend(str(config["embedding_backend"])) == "onnx":
+        ensure_onnx_bundle_sync(
+            str(config["embedding_model"]),
+            models_dir=str(config["models_dir"]),
+        )
     notice = core.start_background_reembed_if_needed(config)
     if notice:
         _log(notice)

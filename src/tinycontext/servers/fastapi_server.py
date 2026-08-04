@@ -27,14 +27,16 @@ app = FastAPI(
 
 @app.on_event("startup")
 async def _prepare_embedding_model() -> None:
+    from tinycontext.services.embedding_service import normalize_embedding_backend
     from tinycontext.services.onnx_bundle_service import ensure_onnx_bundle_sync
 
     config = load_context_config()
-    await asyncio.to_thread(
-        ensure_onnx_bundle_sync,
-        str(config["embedding_model"]),
-        models_dir=str(config["models_dir"]),
-    )
+    if normalize_embedding_backend(str(config["embedding_backend"])) == "onnx":
+        await asyncio.to_thread(
+            ensure_onnx_bundle_sync,
+            str(config["embedding_model"]),
+            models_dir=str(config["models_dir"]),
+        )
     notice = await asyncio.to_thread(core.start_background_reembed_if_needed, config)
     if notice:
         print(f"[tinycontext] {notice}", file=sys.stderr, flush=True)

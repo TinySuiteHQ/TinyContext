@@ -57,6 +57,8 @@ def memory_recall_run(
     encoding_name: str,
     models_dir: Path | None = None,
     embedding_model: str = "fast",
+    embedding_backend: str = "onnx",
+    embedding_openai_env_file: str | None = None,
     embedding_batch_size: int = 32,
     rrf_similarity_cutoff: float | None = None,
     dense_weight: float = 0.5,
@@ -81,13 +83,17 @@ def memory_recall_run(
 
     model_key = embedding_model_key(
         embedding_model,
+        backend=embedding_backend,
         models_dir=models_dir,
+        openai_env_file=embedding_openai_env_file,
         document_prefix=document_prefix,
     )
     query_embedding = embed_texts(
         [query_prefix + query],
         embedding_model=embedding_model,
+        backend=embedding_backend,
         models_dir=models_dir,
+        openai_env_file=embedding_openai_env_file,
         batch_size=embedding_batch_size,
     )[0]
     stale = [
@@ -100,7 +106,9 @@ def memory_recall_run(
         document_embeddings = embed_texts(
             [document_prefix + row.content for row in stale],
             embedding_model=embedding_model,
+            backend=embedding_backend,
             models_dir=models_dir,
+            openai_env_file=embedding_openai_env_file,
             batch_size=embedding_batch_size,
         )
         update_memory_embeddings(

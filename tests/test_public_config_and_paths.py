@@ -25,6 +25,8 @@ class PublicConfigTests(unittest.TestCase):
         )
         self.assertEqual(config["recall_top_k"], 10)
         self.assertEqual(config["recall_rrf_cutoff"], 0.0)
+        self.assertEqual(config["embedding_backend"], "onnx")
+        self.assertEqual(config["embedding_openai_env_file"], ".env")
         json.dumps(config.to_dict())
 
     def test_explicit_file_resolves_database_relative_to_config(self) -> None:
@@ -84,6 +86,22 @@ class PublicConfigTests(unittest.TestCase):
             TinyContextConfig(recall_dense_weight=1.1)
         with self.assertRaisesRegex(ValueError, "recall_rrf_cutoff"):
             TinyContextConfig(recall_rrf_cutoff=1.1)
+        with self.assertRaisesRegex(ValueError, "embedding_backend"):
+            TinyContextConfig(embedding_backend="not-a-real-backend")
+        with self.assertRaisesRegex(ValueError, "embedding_openai_env_file"):
+            TinyContextConfig(embedding_openai_env_file=" ")
+
+    def test_embedding_backend_normalizes_aliases(self) -> None:
+        self.assertEqual(TinyContextConfig(embedding_backend="onnx").embedding_backend, "onnx")
+        self.assertEqual(TinyContextConfig(embedding_backend="default").embedding_backend, "onnx")
+        self.assertEqual(
+            TinyContextConfig(embedding_backend="openai").embedding_backend,
+            "openai_compatible",
+        )
+        self.assertEqual(
+            TinyContextConfig(embedding_backend="openai_compatible").embedding_backend,
+            "openai_compatible",
+        )
 
 
 class ServerConfigTests(unittest.TestCase):
@@ -112,6 +130,8 @@ class ServerConfigTests(unittest.TestCase):
                     "TINYCONTEXT_ENCODING_NAME": "cl100k_base",
                     "TINYCONTEXT_MODELS_DIR": str(Path(temp_dir) / "models"),
                     "TINYCONTEXT_EMBEDDING_MODEL": "balanced",
+                    "TINYCONTEXT_EMBEDDING_BACKEND": "openai",
+                    "TINYCONTEXT_EMBEDDING_OPENAI_ENV_FILE": "/custom/embeddings.env",
                     "TINYCONTEXT_RECALL_RRF_CUTOFF": "0.8",
                     "TINYCONTEXT_RECALL_DENSE_WEIGHT": "0.75",
                     "TINYCONTEXT_DENSE_QUERY_PREFIX": "query: ",
@@ -128,6 +148,8 @@ class ServerConfigTests(unittest.TestCase):
             os.path.normcase(str(Path(temp_dir) / "models")),
         )
         self.assertEqual(config["embedding_model"], "balanced")
+        self.assertEqual(config["embedding_backend"], "openai_compatible")
+        self.assertEqual(config["embedding_openai_env_file"], "/custom/embeddings.env")
         self.assertEqual(config["recall_rrf_cutoff"], 0.8)
         self.assertEqual(config["recall_dense_weight"], 0.75)
         self.assertEqual(config["dense_query_prefix"], "query: ")

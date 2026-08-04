@@ -32,6 +32,8 @@ def _environment_overrides() -> dict[str, Any]:
         ("TINYCONTEXT_ENCODING_NAME", "encoding_name"),
         ("TINYCONTEXT_MODELS_DIR", "models_dir"),
         ("TINYCONTEXT_EMBEDDING_MODEL", "embedding_model"),
+        ("TINYCONTEXT_EMBEDDING_BACKEND", "embedding_backend"),
+        ("TINYCONTEXT_EMBEDDING_OPENAI_ENV_FILE", "embedding_openai_env_file"),
         ("TINYCONTEXT_EMBEDDING_BATCH_SIZE", "embedding_batch_size"),
         ("TINYCONTEXT_RECALL_RRF_CUTOFF", "recall_rrf_cutoff"),
         ("TINYCONTEXT_RECALL_DENSE_WEIGHT", "recall_dense_weight"),

@@ -13,7 +13,15 @@ from tinycontext.paths import native_data_dir, native_models_dir
 
 
 DEFAULT_EMBEDDING_MODEL = "fast"
+DEFAULT_EMBEDDING_BACKEND = "onnx"
+DEFAULT_EMBEDDING_OPENAI_ENV_FILE = ".env"
+SUPPORTED_EMBEDDING_BACKENDS = (
+    "onnx",
+    "openai_compatible",
+)
 _EMBED_LOCK = threading.Lock()
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 _COMMON_ONNX_ALLOW_PATTERNS = (
     "model.onnx",
@@ -132,18 +140,150 @@ def resolve_local_embedding_model_spec(
     )
 
 
-def embedding_model_key(
+def normalize_embedding_backend(backend: str | None) -> str:
+    key = (backend or DEFAULT_EMBEDDING_BACKEND).strip().lower()
+    if key in ("onnx", "default", "local"):
+        return "onnx"
+    if key in ("openai_compatible", "openai"):
+        return "openai_compatible"
+    raise ValueError(
+        f"unknown embedding_backend {backend!r}; expected one of "
+        f"{SUPPORTED_EMBEDDING_BACKENDS} (aliases: default, local -> onnx; openai -> openai_compatible)"
+    )
+
+
+def _resolve_openai_env_path(openai_env_file: str | Path | None) -> Path:
+    raw = str(openai_env_file or DEFAULT_EMBEDDING_OPENAI_ENV_FILE).strip()
+    path = Path(raw)
+    if not path.is_absolute():
+        path = _PROJECT_ROOT / path
+    return path.resolve()
+
+
+def _parse_openai_env_file(path: Path) -> tuple[str | None, str, str]:
+    """Read base URL, API key, and embedding model name from a .env-style file."""
+    if not path.is_file():
+        raise RuntimeError(
+            f"openai_compatible backend requires {path} with OPENAI_BASE_URL (optional), "
+            "OPENAI_API_KEY, and OPENAI_EMBEDDING_MODEL (or EMBEDDING_MODEL)"
+        )
+    text = path.read_text(encoding="utf-8")
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "=" not in stripped:
+            continue
+        name, _, rest = stripped.partition("=")
+        key = name.strip().upper()
+        val = rest.strip().strip('"').strip("'")
+        if key:
+            values[key] = val
+
+    def pick(*keys: str) -> str | None:
+        for k in keys:
+            v = values.get(k.upper())
+            if v:
+                return v
+        return None
+
+    api_key = pick("OPENAI_API_KEY", "API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            f"{path} must set OPENAI_API_KEY (or API_KEY) for openai_compatible embeddings"
+        )
+    base_raw = pick("OPENAI_BASE_URL", "BASE_URL", "API_URL")
+    base_url = base_raw.strip() if base_raw else None
+    if base_url == "":
+        base_url = None
+    model = pick(
+        "OPENAI_EMBEDDING_MODEL",
+        "EMBEDDING_MODEL",
+        "MODEL_NAME",
+        "MODEL",
+    )
+    if not model:
+        raise RuntimeError(
+            f"{path} must set OPENAI_EMBEDDING_MODEL (or EMBEDDING_MODEL / MODEL_NAME) "
+            "for openai_compatible embeddings"
+        )
+    return base_url, api_key, model
+
+
+@lru_cache(maxsize=8)
+def _load_openai_client(base_url: str | None, api_key: str) -> Any:
+    try:
+        from openai import OpenAI
+    except Exception as exc:
+        raise RuntimeError(
+            "The openai_compatible backend requires the `openai` package. "
+            "Install with: pip install openai"
+        ) from exc
+
+    kwargs: dict[str, Any] = {"api_key": api_key}
+    if base_url:
+        kwargs["base_url"] = base_url
+    try:
+        return OpenAI(**kwargs)
+    except Exception as exc:
+        raise RuntimeError("failed to construct OpenAI-compatible client") from exc
+
+
+def _embed_openai_compatible_sync(
+    client: Any,
+    model_name: str,
+    inputs: list[str],
+    *,
+    base_url: str | None,
+) -> list[list[float]]:
+    if not inputs:
+        return []
+    try:
+        response = client.embeddings.create(model=model_name, input=inputs)
+    except Exception as exc:
+        raise RuntimeError(
+            f"failed to generate embeddings with openai_compatible model {model_name!r} "
+            f"(base_url={base_url!r})"
+        ) from exc
+    return [list(item.embedding) for item in response.data]
+
+
+def resolve_embedding_model_display(
+    backend: str = DEFAULT_EMBEDDING_BACKEND,
     embedding_model: str | None = None,
     *,
     models_dir: str | Path | None = None,
+    openai_env_file: str | Path | None = None,
+) -> str:
+    """Human-readable "what model is actually in use" string, for doctor.py."""
+    backend_key = normalize_embedding_backend(backend)
+    if backend_key == "onnx":
+        spec = resolve_local_embedding_model_spec(embedding_model, models_dir=models_dir)
+        return f"{spec.requested_model} ({spec.repo_id}, local ONNX)"
+    base_url, _, model_name = _parse_openai_env_file(_resolve_openai_env_path(openai_env_file))
+    return f"{model_name} (openai_compatible, base_url={base_url or 'api.openai.com'})"
+
+
+def embedding_model_key(
+    embedding_model: str | None = None,
+    *,
+    backend: str = DEFAULT_EMBEDDING_BACKEND,
+    models_dir: str | Path | None = None,
+    openai_env_file: str | Path | None = None,
     document_prefix: str = "",
 ) -> str:
-    spec = resolve_local_embedding_model_spec(
-        embedding_model,
-        models_dir=models_dir,
-    )
+    backend_key = normalize_embedding_backend(backend)
+    if backend_key == "onnx":
+        spec = resolve_local_embedding_model_spec(
+            embedding_model,
+            models_dir=models_dir,
+        )
+        model_identifier = spec.repo_id
+    else:
+        _, _, model_identifier = _parse_openai_env_file(_resolve_openai_env_path(openai_env_file))
     prefix_digest = sha256(document_prefix.encode("utf-8")).hexdigest()[:12]
-    return f"onnx:{spec.repo_id}:document-prefix:{prefix_digest}"
+    return f"{backend_key}:{model_identifier}:document-prefix:{prefix_digest}"
 
 
 def _find_onnx_model_path(spec: LocalEmbeddingModelSpec) -> Path | None:
@@ -277,14 +417,33 @@ def embed_texts(
     inputs: Sequence[str],
     *,
     embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+    backend: str = DEFAULT_EMBEDDING_BACKEND,
+    models_dir: str | Path | None = None,
+    openai_env_file: str | Path | None = None,
+    batch_size: int = 32,
+) -> list[list[float]]:
+    texts = list(inputs)
+    if not texts:
+        return []
+
+    if normalize_embedding_backend(backend) == "openai_compatible":
+        env_path = _resolve_openai_env_path(openai_env_file)
+        base_url, api_key, model_name = _parse_openai_env_file(env_path)
+        client = _load_openai_client(base_url, api_key)
+        return _embed_openai_compatible_sync(client, model_name, texts, base_url=base_url)
+
+    return _embed_texts_onnx(texts, embedding_model=embedding_model, models_dir=models_dir, batch_size=batch_size)
+
+
+def _embed_texts_onnx(
+    texts: list[str],
+    *,
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL,
     models_dir: str | Path | None = None,
     batch_size: int = 32,
 ) -> list[list[float]]:
     import numpy as np
 
-    texts = list(inputs)
-    if not texts:
-        return []
     from tinycontext.services.onnx_bundle_service import ensure_onnx_bundle_sync
 
     ensure_onnx_bundle_sync(

@@ -13,7 +13,9 @@ from tinycontext.services.context_config_service import (
     resolve_context_config_path,
 )
 from tinycontext.services.embedding_service import (
+    normalize_embedding_backend,
     onnx_bundle_ready,
+    resolve_embedding_model_display,
     resolve_local_embedding_model_spec,
 )
 from tinycontext.services.memory_store_service import sqlite_vec_version
@@ -63,20 +65,32 @@ def run() -> int:
         f"({'found' if config_path.exists() else 'not found, using built-in defaults'})"
     )
     db_path = Path(str(config["memory_db_path"]))
-    model_spec = resolve_local_embedding_model_spec(
-        str(config.get("embedding_model", "fast")),
-        models_dir=str(config.get("models_dir") or ""),
-    )
+    backend = normalize_embedding_backend(str(config.get("embedding_backend", "onnx")))
     _log(f"database: {db_path}")
-    _log(f"embedding model: {model_spec.requested_model} ({model_spec.repo_id})")
-    _log(f"model directory: {model_spec.local_dir}")
-    if onnx_bundle_ready(
-        model_spec.requested_model,
-        models_dir=model_spec.local_dir.parent,
-    ):
-        _log("model bundle: ready")
+    _log(
+        "embedding model: "
+        + resolve_embedding_model_display(
+            backend,
+            str(config.get("embedding_model", "fast")),
+            models_dir=str(config.get("models_dir") or ""),
+            openai_env_file=str(config.get("embedding_openai_env_file") or ""),
+        )
+    )
+    if backend == "onnx":
+        model_spec = resolve_local_embedding_model_spec(
+            str(config.get("embedding_model", "fast")),
+            models_dir=str(config.get("models_dir") or ""),
+        )
+        _log(f"model directory: {model_spec.local_dir}")
+        if onnx_bundle_ready(
+            model_spec.requested_model,
+            models_dir=model_spec.local_dir.parent,
+        ):
+            _log("model bundle: ready")
+        else:
+            _log("model bundle: not downloaded; first server start or API use will fetch it")
     else:
-        _log("model bundle: not downloaded; first server start or API use will fetch it")
+        _log("model directory: n/a (openai_compatible backend, no local bundle)")
     drift_warning = describe_embedding_drift(config)
     if drift_warning:
         _log(f"embedding drift: WARNING - {drift_warning}")

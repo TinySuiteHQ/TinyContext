@@ -31,7 +31,9 @@ def _kick_off_background_reindex(resolved: dict[str, Any], db_path: Path) -> str
     ensure_background_reindex(
         db_path,
         embedding_model=str(resolved["embedding_model"]),
+        embedding_backend=str(resolved["embedding_backend"]),
         models_dir=Path(str(resolved["models_dir"])),
+        openai_env_file=str(resolved["embedding_openai_env_file"]),
         embedding_batch_size=int(resolved["embedding_batch_size"]),
         document_prefix=str(resolved["dense_document_prefix"]),
     )
@@ -73,12 +75,16 @@ def save_memories(
     vectors = embed_texts(
         contents,
         embedding_model=str(resolved["embedding_model"]),
+        backend=str(resolved["embedding_backend"]),
         models_dir=Path(str(resolved["models_dir"])),
+        openai_env_file=str(resolved["embedding_openai_env_file"]),
         batch_size=int(resolved["embedding_batch_size"]),
     )
     model_key = embedding_model_key(
         str(resolved["embedding_model"]),
+        backend=str(resolved["embedding_backend"]),
         models_dir=Path(str(resolved["models_dir"])),
+        openai_env_file=str(resolved["embedding_openai_env_file"]),
         document_prefix=str(resolved["dense_document_prefix"]),
     )
     rows: list[MemoryRow] = []
@@ -140,6 +146,8 @@ def recall_memories(
         encoding_name=str(resolved["encoding_name"]),
         models_dir=Path(str(resolved["models_dir"])),
         embedding_model=str(resolved["embedding_model"]),
+        embedding_backend=str(resolved["embedding_backend"]),
+        embedding_openai_env_file=str(resolved["embedding_openai_env_file"]),
         embedding_batch_size=int(resolved["embedding_batch_size"]),
         rrf_similarity_cutoff=float(resolved["recall_rrf_cutoff"]),
         dense_weight=float(resolved["recall_dense_weight"]),
@@ -177,7 +185,9 @@ def describe_embedding_drift(config: ConfigInput | None = None) -> str | None:
 
     model_key = embedding_model_key(
         str(resolved["embedding_model"]),
+        backend=str(resolved["embedding_backend"]),
         models_dir=Path(str(resolved["models_dir"])),
+        openai_env_file=str(resolved["embedding_openai_env_file"]),
         document_prefix=str(resolved["dense_document_prefix"]),
     )
     mismatched = embedding_model_mismatch_count(db_path, model_key)

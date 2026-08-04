@@ -20,6 +20,8 @@ def default_config() -> dict[str, Any]:
         "encoding_name": "o200k_base",
         "models_dir": str(native_models_dir()),
         "embedding_model": "fast",
+        "embedding_backend": "onnx",
+        "embedding_openai_env_file": ".env",
         "embedding_batch_size": 32,
         "recall_rrf_cutoff": 0.0,
         "recall_dense_weight": 0.5,
@@ -105,11 +107,14 @@ def normalize_config(
         raise ValueError("recall_rrf_k must be at least 0")
     config["recall_rrf_k"] = rrf_k
 
-    for key in ("encoding_name", "embedding_model"):
+    for key in ("encoding_name", "embedding_model", "embedding_openai_env_file"):
         value = str(config[key] or "").strip()
         if not value:
             raise ValueError(f"{key} must not be empty")
         config[key] = value
+    from tinycontext.services.embedding_service import normalize_embedding_backend
+
+    config["embedding_backend"] = normalize_embedding_backend(str(config["embedding_backend"]))
     for key in ("dense_query_prefix", "dense_document_prefix"):
         config[key] = str(config[key] or "")
     return config
