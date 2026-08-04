@@ -102,7 +102,8 @@ class OpenAICompatibleBackendTests(unittest.TestCase):
     def test_resolve_openai_env_path_relative_to_project_root(self) -> None:
         resolved = _resolve_openai_env_path("some/relative.env")
         self.assertTrue(resolved.is_absolute())
-        self.assertTrue(str(resolved).endswith("some/relative.env"))
+        self.assertEqual(resolved.name, "relative.env")
+        self.assertEqual(resolved.parent.name, "some")
 
     def test_embedding_model_key_differs_by_backend_even_with_same_model_string(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
