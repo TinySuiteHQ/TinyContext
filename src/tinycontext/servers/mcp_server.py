@@ -16,6 +16,12 @@ from tinycontext import core
 from tinycontext.errors import MEMORY_ERROR_MAP, MemoryError
 from tinycontext.models import MemoryInput
 from tinycontext.services.context_config_service import load_context_config
+from tinycontext.services.hosted_tenancy_service import (
+    hosted_tenancy_enabled,
+    load_hosted_tenancy_config,
+    tenant_config,
+)
+from tinycontext.servers.hosted_tenancy_middleware import HostedTenancyMiddleware
 
 
 def _mcp_host() -> str:
@@ -137,6 +143,21 @@ async def _run_streamable_http_combined_async() -> None:
         middleware=_streamable_http_cors_middleware() + stream_app.user_middleware,
         lifespan=stream_app.router.lifespan_context,
     )
+    app = HostedTenancyMiddleware(app)
+    config = uvicorn.Config(
+        app,
+        host=mcp.settings.host,
+        port=mcp.settings.port,
+        log_level=mcp.settings.log_level.lower(),
+    )
+    await uvicorn.Server(config).serve()
+
+
+async def _run_sse_async() -> None:
+    """Run legacy hosted SSE through the same trusted-identity boundary."""
+    import uvicorn
+
+    app = HostedTenancyMiddleware(mcp.sse_app())
     config = uvicorn.Config(
         app,
         host=mcp.settings.host,
@@ -246,7 +267,7 @@ async def save_memories_tool(
 ) -> dict[str, Any]:
     started = time.monotonic()
     _log(f"save_memories called count={len(memories)}")
-    config = load_context_config()
+    config = tenant_config(load_context_config())
     try:
         payload = core.save_memories(
             _normalize_memory_items(memories),
@@ -279,7 +300,7 @@ async def recall_memories_tool(
 ) -> str:
     started = time.monotonic()
     _log(f"recall_memories called query={query!r}")
-    config = load_context_config()
+    config = tenant_config(load_context_config())
     try:
         payload = core.recall_memories(
             query,
@@ -303,25 +324,34 @@ def main() -> None:
     from tinycontext.services.embedding_service import normalize_embedding_backend
     from tinycontext.services.onnx_bundle_service import ensure_onnx_bundle_sync
 
-    config = load_context_config()
-    if normalize_embedding_backend(str(config["embedding_backend"])) == "onnx":
-        ensure_onnx_bundle_sync(
-            str(config["embedding_model"]),
-            models_dir=str(config["models_dir"]),
-        )
-    notice = core.start_background_reembed_if_needed(config)
-    if notice:
-        _log(notice)
     transport = os.environ.get("MCP_TRANSPORT", "stdio").strip() or "stdio"
     if transport not in {"stdio", "sse", "streamable-http"}:
         raise ValueError(
             "MCP_TRANSPORT must be one of: stdio, sse, streamable-http "
             "(default stdio for IDE-spawned MCP; set env only for standalone HTTP/SSE)"
         )
+    if hosted_tenancy_enabled() and transport == "stdio":
+        raise ValueError("hosted tenancy requires MCP_TRANSPORT=sse or streamable-http")
+    if hosted_tenancy_enabled():
+        load_hosted_tenancy_config()
+
+    config = load_context_config()
+    if normalize_embedding_backend(str(config["embedding_backend"])) == "onnx":
+        ensure_onnx_bundle_sync(
+            str(config["embedding_model"]),
+            models_dir=str(config["models_dir"]),
+        )
+    notice = None if hosted_tenancy_enabled() else core.start_background_reembed_if_needed(config)
+    if notice:
+        _log(notice)
     if transport == "streamable-http":
         import anyio
 
         anyio.run(_run_streamable_http_combined_async)
+    elif transport == "sse":
+        import anyio
+
+        anyio.run(_run_sse_async)
     else:
         mcp.run(transport=transport)
 

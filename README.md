@@ -153,6 +153,32 @@ Connect an MCP client to:
 
 The `data` volume persists `/data/memories.db` and `/data/models`.
 
+### Hosted multi-user deployment
+
+`compose.quickstart.yaml` is deliberately a local, single-user example. Do
+not expose it directly to multiple users. For an authenticated hosted service,
+use [`compose.hosted.yaml`](compose.hosted.yaml) behind a reverse proxy:
+
+```bash
+export TINYCONTEXT_TENANT_SECRET="a-stable-secret-of-at-least-32-bytes"
+export TINYCONTEXT_TRUSTED_PROXY_CIDRS="172.20.0.0/16"
+docker network create tinycontext-proxy
+docker compose -f compose.hosted.yaml up -d
+```
+
+The proxy is the only component on `tinycontext-proxy` that may reach the
+container. It must authenticate the caller, strip any incoming
+`X-TinyContext-User-Id` header, and inject that header with a stable verified
+user ID. Set `TINYCONTEXT_TRUSTED_PROXY_CIDRS` to the proxy's direct Docker or
+private-network CIDR. TinyContext rejects requests from other peers and never
+accepts a user ID in an MCP tool or API request body.
+
+Hosted tenancy stores each user in a separate SQLite file under
+`TINYCONTEXT_TENANT_STORE_DIR`; filenames are HMAC-derived and do not expose
+the source user ID. Existing `/data/memories.db` data is not migrated, because
+it has no safe ownership attribution. `session_id` remains an optional scope
+inside a single user's store.
+
 Stop the service with:
 
 ```bash
@@ -280,6 +306,10 @@ pip install "tinysuite-context[server]"
 uvicorn tinycontext.servers.fastapi_server:app --host 0.0.0.0 --port 8000
 ```
 
+When `TINYCONTEXT_TENANCY=proxy-header` is enabled, these endpoints require
+the same trusted-proxy identity as hosted MCP. The health endpoint remains
+available for liveness checks.
+
 ### Save request
 
 ```json
@@ -311,6 +341,7 @@ uvicorn tinycontext.servers.fastapi_server:app --host 0.0.0.0 --port 8000
 | `empty_memory` | 400 | Missing or blank memory content/query |
 | `session_not_found` | 404 | No memories exist for the requested session |
 | `recall_budget` | 400 | Invalid recall budget parameters |
+| `unauthorized` | 401 | Hosted request lacks a valid trusted-proxy identity |
 | `internal_error` | 500 | Unexpected server error |
 
 ## Configuration
@@ -364,6 +395,11 @@ Environment overrides:
 | `MCP_HOST` | MCP HTTP bind host |
 | `MCP_PORT` | MCP HTTP bind port |
 | `MCP_CORS_ORIGINS` | Comma-separated CORS origins |
+| `TINYCONTEXT_TENANCY` | Set to `proxy-header` for hosted multi-user isolation |
+| `TINYCONTEXT_TRUSTED_USER_HEADER` | Proxy-injected user-ID header; defaults to `X-TinyContext-User-Id` |
+| `TINYCONTEXT_TENANT_STORE_DIR` | Required root directory for per-user SQLite files in hosted mode |
+| `TINYCONTEXT_TENANT_SECRET` | Required stable secret (at least 32 bytes) for opaque tenant filenames |
+| `TINYCONTEXT_TRUSTED_PROXY_CIDRS` | Required direct proxy CIDR list in hosted mode |
 
 An existing checkout-local database remains usable:
 

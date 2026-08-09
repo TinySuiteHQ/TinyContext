@@ -1,0 +1,51 @@
+name: tinycontext-hosted
+
+# Attach this service to an already-authenticated reverse proxy. The proxy must
+# remove client-supplied X-TinyContext-User-Id and inject its verified value.
+services:
+  tinycontext:
+    image: marcellm01/tinycontext:latest
+    restart: unless-stopped
+    expose:
+      - "8000"
+    volumes:
+      - tenant-data:/data
+    environment:
+      TINYCONTEXT_TENANCY: proxy-header
+      TINYCONTEXT_TRUSTED_USER_HEADER: X-TinyContext-User-Id
+      TINYCONTEXT_TENANT_STORE_DIR: /data/tenants
+      TINYCONTEXT_TENANT_SECRET: ${TINYCONTEXT_TENANT_SECRET:?set a stable 32-byte secret}
+      TINYCONTEXT_TRUSTED_PROXY_CIDRS: ${TINYCONTEXT_TRUSTED_PROXY_CIDRS:?set the proxy network CIDR}
+      TINYCONTEXT_MODELS_DIR: /data/models
+      MCP_TRANSPORT: streamable-http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8000
+    networks:
+      - proxy
+
+  fastapi:
+    image: marcellm01/tinycontext:latest
+    command: ["uvicorn", "tinycontext.servers.fastapi_server:app", "--host", "0.0.0.0", "--port", "8000"]
+    restart: unless-stopped
+    profiles: ["fastapi"]
+    expose:
+      - "8000"
+    volumes:
+      - tenant-data:/data
+    environment:
+      TINYCONTEXT_TENANCY: proxy-header
+      TINYCONTEXT_TRUSTED_USER_HEADER: X-TinyContext-User-Id
+      TINYCONTEXT_TENANT_STORE_DIR: /data/tenants
+      TINYCONTEXT_TENANT_SECRET: ${TINYCONTEXT_TENANT_SECRET:?set a stable 32-byte secret}
+      TINYCONTEXT_TRUSTED_PROXY_CIDRS: ${TINYCONTEXT_TRUSTED_PROXY_CIDRS:?set the proxy network CIDR}
+      TINYCONTEXT_MODELS_DIR: /data/models
+    networks:
+      - proxy
+
+volumes:
+  tenant-data:
+
+networks:
+  proxy:
+    external: true
+    name: tinycontext-proxy

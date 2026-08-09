@@ -12,6 +12,12 @@ from tinycontext import core
 from tinycontext.errors import MEMORY_ERROR_MAP, MemoryError
 from tinycontext.models import MemoryInput
 from tinycontext.services.context_config_service import load_context_config
+from tinycontext.services.hosted_tenancy_service import (
+    hosted_tenancy_enabled,
+    load_hosted_tenancy_config,
+    tenant_config,
+)
+from tinycontext.servers.hosted_tenancy_middleware import HostedTenancyMiddleware
 
 
 def _tinycontext_version() -> str:
@@ -23,6 +29,7 @@ app = FastAPI(
     description="Token-light hybrid memory save and recall endpoints for agents.",
     version=_tinycontext_version(),
 )
+app.add_middleware(HostedTenancyMiddleware)
 
 
 @app.on_event("startup")
@@ -30,6 +37,8 @@ async def _prepare_embedding_model() -> None:
     from tinycontext.services.embedding_service import normalize_embedding_backend
     from tinycontext.services.onnx_bundle_service import ensure_onnx_bundle_sync
 
+    if hosted_tenancy_enabled():
+        load_hosted_tenancy_config()
     config = load_context_config()
     if normalize_embedding_backend(str(config["embedding_backend"])) == "onnx":
         await asyncio.to_thread(
@@ -37,7 +46,11 @@ async def _prepare_embedding_model() -> None:
             str(config["embedding_model"]),
             models_dir=str(config["models_dir"]),
         )
-    notice = await asyncio.to_thread(core.start_background_reembed_if_needed, config)
+    # Hosted mode has one database per user, so reindex work starts on the
+    # first authenticated request rather than a nonexistent global database.
+    notice = None if hosted_tenancy_enabled() else await asyncio.to_thread(
+        core.start_background_reembed_if_needed, config
+    )
     if notice:
         print(f"[tinycontext] {notice}", file=sys.stderr, flush=True)
 
@@ -83,7 +96,7 @@ async def health() -> dict[str, str]:
 
 @app.post("/save_memories")
 async def save_memories_endpoint(request: SaveMemoriesRequest) -> dict[str, Any]:
-    config = load_context_config()
+    config = tenant_config(load_context_config())
     try:
         return core.save_memories(
             _to_memory_inputs(request.memories),
@@ -109,7 +122,7 @@ async def save_memories_get(
 
 @app.post("/recall_memories")
 async def recall_memories_endpoint(request: RecallMemoriesRequest) -> dict[str, Any]:
-    config = load_context_config()
+    config = tenant_config(load_context_config())
     try:
         return core.recall_memories(
             request.query,
