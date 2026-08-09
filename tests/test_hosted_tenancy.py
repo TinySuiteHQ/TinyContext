@@ -48,7 +48,12 @@ class HostedTenancyTests(unittest.IsolatedAsyncioTestCase):
 
     def tearDown(self) -> None:
         for database in self.store_dir.glob("*.db"):
-            close_connection(database)
+            # tenant_config() resolves its store directory before opening SQLite.
+            # Resolve the globbed path too, otherwise aliases such as /var ->
+            # /private/var miss the pooled connection. macOS permits deleting
+            # that open file; Windows correctly rejects the temp-directory
+            # cleanup.
+            close_connection(database.resolve())
         self._tmpdir.cleanup()
 
     def _config_for(self, user_id: str) -> dict[str, object]:
