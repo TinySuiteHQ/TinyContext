@@ -27,7 +27,8 @@ No hosted account. No giant context dumps. No required vector database.
 | Docker | You want persistent self-hosted storage and HTTP MCP | `docker compose ... up -d` |
 
 The Python library contains the memory engine. MCP, FastAPI, and Docker are
-adapters around the same `save_memories` and `recall_memories` operations.
+adapters around the same `save_memories`, `recall_memories`, and
+`delete_memory` operations.
 
 ## One-command MCP
 
