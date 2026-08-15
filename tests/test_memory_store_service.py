@@ -9,6 +9,7 @@ from tinycontext.models import MemoryRow
 from tinycontext.services import memory_store_service
 from tinycontext.services.memory_store_service import (
     close_connection,
+    delete_memory,
     embedding_storage_stats,
     fetch_candidates,
     fetch_dense_scores,
@@ -82,6 +83,22 @@ class MemoryStoreServiceTests(unittest.TestCase):
             ],
         )
         self.assertTrue(session_exists(self.db_path, "s1"))
+
+    def test_delete_memory_removes_row_and_reports_existence(self) -> None:
+        insert_memories(
+            self.db_path,
+            [
+                MemoryRow(
+                    id="m1",
+                    session_id="s1",
+                    content="one",
+                    created_at="2026-06-30T10:00:00Z",
+                )
+            ],
+        )
+        self.assertTrue(delete_memory(self.db_path, "m1"))
+        self.assertEqual(fetch_candidates(self.db_path), [])
+        self.assertFalse(delete_memory(self.db_path, "m1"))
 
     def test_vectors_are_stored_as_blobs_and_ranked_inside_sqlite(self) -> None:
         insert_memories(

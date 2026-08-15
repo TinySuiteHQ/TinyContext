@@ -71,6 +71,10 @@ class RecallMemoriesRequest(BaseModel):
     top_k: int | None = Field(default=None, ge=1)
 
 
+class DeleteMemoryRequest(BaseModel):
+    memory_id: str = Field(..., min_length=1)
+
+
 def _raise_memory_http_error(exc: Exception) -> None:
     mapping = MEMORY_ERROR_MAP.get(type(exc))
     if mapping is None:
@@ -150,3 +154,12 @@ async def recall_memories_get(
             top_k=top_k,
         )
     )
+
+
+@app.post("/delete_memory")
+async def delete_memory_endpoint(request: DeleteMemoryRequest) -> dict[str, Any]:
+    config = tenant_config(load_context_config())
+    try:
+        return core.delete_memory(request.memory_id, config=config)
+    except MemoryError as exc:
+        _raise_memory_http_error(exc)

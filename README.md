@@ -61,15 +61,17 @@ Check the resolved configuration and storage readiness with:
 uvx --python 3.12 --from "tinysuite-context[server]" tinycontext doctor
 ```
 
-TinyContext exposes two tools:
+TinyContext exposes three tools:
 
 ```text
 save_memories(memories)
 recall_memories(query)
+delete_memory(memory_id)
 ```
 
 - Use `save_memories` for durable facts, preferences, decisions, and research notes.
 - Use `recall_memories` before answering when previous context may help.
+- Use `delete_memory` to forget or correct a previously saved memory (find its id via `recall_memories` first).
 
 MCP recall returns prompt-ready context with explicit memory boundaries:
 
@@ -291,13 +293,14 @@ like to see it, good or bad. Open an issue or a PR with what you found.
 
 ## FastAPI
 
-The optional HTTP API mirrors the two MCP tools.
+The optional HTTP API mirrors the MCP tools.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/health` | Liveness |
 | POST/GET | `/save_memories` | Persist one or more memories |
 | POST/GET | `/recall_memories` | Recall ranked memories within a token budget |
+| POST | `/delete_memory` | Delete a single memory by id |
 
 Install and run it directly:
 
@@ -431,7 +434,7 @@ uvicorn servers.fastapi_server:app --host 0.0.0.0 --port 8000
 
 ## Entrypoints
 
-- `tinycontext.save_memories` and `tinycontext.recall_memories`: Python API
+- `tinycontext.save_memories`, `tinycontext.recall_memories`, and `tinycontext.delete_memory`: Python API
 - `tinycontext` / `tinycontext mcp`: stdio MCP
 - `tinycontext serve`: Streamable HTTP MCP
 - `tinycontext doctor`: configuration and storage readiness

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from tinycontext.config import ConfigInput, resolve_config
-from tinycontext.errors import EmptyMemoryError, RecallBudgetError
+from tinycontext.errors import EmptyMemoryError, MemoryNotFoundError, RecallBudgetError
 from tinycontext.models import MemoryInput, MemoryRow
 from tinycontext.pipelines.memory_recall import memory_recall_run
 from tinycontext.services.embedding_reindex_service import (
@@ -17,6 +17,7 @@ from tinycontext.services.embedding_reindex_service import (
 )
 from tinycontext.services.embedding_service import embed_texts, embedding_model_key
 from tinycontext.services.memory_store_service import (
+    delete_memory as _delete_memory_row,
     embedding_model_mismatch_count,
     embedding_storage_stats,
     insert_memories,
@@ -159,6 +160,23 @@ def recall_memories(
     if notice:
         result["notice"] = notice
     return result
+
+
+def delete_memory(
+    memory_id: str,
+    *,
+    config: ConfigInput | None = None,
+) -> dict[str, Any]:
+    memory_id = memory_id.strip()
+    if not memory_id:
+        raise EmptyMemoryError("memory_id must not be empty")
+
+    resolved = _resolved_values(config)
+    db_path = Path(str(resolved["memory_db_path"]))
+    deleted = _delete_memory_row(db_path, memory_id)
+    if not deleted:
+        raise MemoryNotFoundError(f"no memory found with id {memory_id!r}")
+    return {"id": memory_id, "deleted": True}
 
 
 def start_background_reembed_if_needed(config: ConfigInput | None = None) -> str | None:

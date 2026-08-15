@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tinycontext.servers.mcp_server import (
+    delete_memory_tool,
     mcp,
     recall_memories_tool,
     save_memories_tool,
@@ -120,5 +121,27 @@ class McpMemoryToolTests(unittest.IsolatedAsyncioTestCase):
             {
                 "save_memories": {"memories"},
                 "recall_memories": {"query"},
+                "delete_memory": {"memory_id"},
             },
         )
+
+    async def test_delete_memory_tool(self) -> None:
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            saved = await _fn(save_memories_tool)(
+                [{"content": "agent memory item"}],
+            )
+            memory_id = saved["saved"][0]["id"]
+            payload = await _fn(delete_memory_tool)(memory_id)
+        self.assertEqual(payload, {"id": memory_id, "deleted": True})
+
+    async def test_delete_memory_tool_maps_not_found_error(self) -> None:
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            with self.assertRaises(ValueError) as ctx:
+                await _fn(delete_memory_tool)("missing-id")
+        self.assertIn("memory_not_found", str(ctx.exception))

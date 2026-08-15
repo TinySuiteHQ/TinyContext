@@ -6,10 +6,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tinycontext import MemoryInput, recall_memories, save_memories
+from tinycontext import MemoryInput, delete_memory, recall_memories, save_memories
 from tinycontext.core import describe_embedding_drift
 from tinycontext.errors import (
     EmptyMemoryError,
+    MemoryNotFoundError,
     SessionNotFoundError,
 )
 from tinycontext.services.memory_store_service import close_connection
@@ -117,6 +118,25 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("notice", payload)
             self.assertIn("in progress", payload["notice"])
             release.set()
+
+    def test_delete_memory_removes_it_from_recall(self) -> None:
+        payload = save_memories(
+            [MemoryInput(content="User likes tea")],
+            config=self.config,
+        )
+        memory_id = payload["saved"][0]["id"]
+        result = delete_memory(memory_id, config=self.config)
+        self.assertEqual(result, {"id": memory_id, "deleted": True})
+        recalled = recall_memories("tea", config=self.config)
+        self.assertEqual(recalled["memories"], [])
+
+    def test_delete_missing_memory_raises(self) -> None:
+        with self.assertRaises(MemoryNotFoundError):
+            delete_memory("missing-id", config=self.config)
+
+    def test_delete_rejects_empty_id(self) -> None:
+        with self.assertRaises(EmptyMemoryError):
+            delete_memory("   ", config=self.config)
 
     def test_dense_similarity_recalls_a_semantic_match(self) -> None:
         save_memories(

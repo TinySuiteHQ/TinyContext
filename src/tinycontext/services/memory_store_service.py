@@ -240,6 +240,19 @@ def insert_memories(db_path: Path, rows: list[MemoryRow]) -> None:
     _pool.execute(db_path, _insert)
 
 
+def delete_memory(db_path: Path, memory_id: str) -> bool:
+    """Delete a memory by id from both tables. Returns whether it existed."""
+
+    def _delete(conn: sqlite3.Connection) -> bool:
+        cursor = conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+        deleted = cursor.rowcount > 0
+        conn.execute("DELETE FROM memories_fts WHERE id = ?", (memory_id,))
+        conn.commit()
+        return deleted
+
+    return _pool.execute(db_path, _delete)
+
+
 def _row_to_memory(row: sqlite3.Row) -> MemoryRow:
     return MemoryRow(
         id=str(row["id"]),

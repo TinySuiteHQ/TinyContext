@@ -168,10 +168,11 @@ async def _run_sse_async() -> None:
 
 
 MCP_INSTRUCTIONS = """
-This MCP server exposes two tools:
+This MCP server exposes three tools:
 
 1. save_memories(memories)
 2. recall_memories(query)
+3. delete_memory(memory_id)
 
 Call recall_memories proactively, before answering, whenever the user references
 something that could have been said before: their name, preferences, a project,
@@ -186,6 +187,10 @@ Use save_memories to persist short, durable facts, preferences, or decisions
 that would be useful in a future conversation. Each memory should be concise
 and self-contained (understandable without the surrounding chat). Do not save
 one-off task details, or anything already obvious from the code/repo itself.
+
+Use delete_memory when the user asks to forget, remove, or correct something
+that was previously saved. Recall first to find the memory's id, then delete
+by that id.
 
 A <notice> tag in a response is informational, not an error — proceed with
 whatever results came back.
@@ -318,6 +323,35 @@ async def recall_memories_tool(
         f"elapsed={elapsed:.2f}s"
     )
     return _format_recalled_memories(payload)
+
+
+@mcp.tool(
+    name="delete_memory",
+    title="Delete Memory",
+    description=(
+        "Permanently delete a single stored memory by id. Use recall_memories "
+        "first to find the id of the memory to remove."
+    ),
+)
+async def delete_memory_tool(
+    memory_id: Annotated[
+        str,
+        Field(description="id of the memory to delete, as returned by save_memories or recall_memories."),
+    ],
+) -> dict[str, Any]:
+    started = time.monotonic()
+    _log(f"delete_memory called memory_id={memory_id!r}")
+    config = tenant_config(load_context_config())
+    try:
+        payload = core.delete_memory(memory_id, config=config)
+    except MemoryError as exc:
+        elapsed = time.monotonic() - started
+        code = MEMORY_ERROR_MAP.get(type(exc), ("internal_error", 500))[0]
+        _log(f"delete_memory failed elapsed={elapsed:.2f}s code={code} error={exc!r}")
+        raise _memory_tool_error(exc) from exc
+    elapsed = time.monotonic() - started
+    _log(f"delete_memory returning deleted={payload['deleted']} elapsed={elapsed:.2f}s")
+    return payload
 
 
 def main() -> None:

@@ -8,9 +8,11 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from tinycontext.servers.fastapi_server import (
+    DeleteMemoryRequest,
     MemoryInputModel,
     RecallMemoriesRequest,
     SaveMemoriesRequest,
+    delete_memory_endpoint,
     recall_memories_endpoint,
     save_memories_endpoint,
 )
@@ -60,6 +62,36 @@ class FastApiMemoryEndpointTests(unittest.IsolatedAsyncioTestCase):
                 RecallMemoriesRequest(query="sqlite")
             )
         self.assertGreaterEqual(len(payload["memories"]), 1)
+
+    async def test_delete_memory_endpoint(self) -> None:
+        with patch(
+            "tinycontext.servers.fastapi_server.load_context_config",
+            return_value=self.config,
+        ):
+            saved = await save_memories_endpoint(
+                SaveMemoriesRequest(
+                    memories=[MemoryInputModel(content="forget this")],
+                )
+            )
+            memory_id = saved["saved"][0]["id"]
+            payload = await delete_memory_endpoint(
+                DeleteMemoryRequest(memory_id=memory_id)
+            )
+        self.assertEqual(payload, {"id": memory_id, "deleted": True})
+
+    async def test_delete_memory_maps_not_found_error(self) -> None:
+        with patch(
+            "tinycontext.servers.fastapi_server.load_context_config",
+            return_value=self.config,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                await delete_memory_endpoint(
+                    DeleteMemoryRequest(memory_id="missing-id")
+                )
+        self.assertEqual(ctx.exception.status_code, 404)
+        detail = ctx.exception.detail
+        assert isinstance(detail, dict)
+        self.assertEqual(detail["code"], "memory_not_found")
 
     async def test_save_memories_maps_empty_memory_error(self) -> None:
         with patch(
