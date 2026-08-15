@@ -52,6 +52,22 @@ _EMBEDDING_COLUMNS: dict[str, str] = {
     "embedding_dimensions": "INTEGER",
 }
 
+SHORT_REF_LENGTH = 12
+_SHORT_REF_RE = re.compile(rf"^[0-9a-f]{{{SHORT_REF_LENGTH}}}$")
+
+
+def short_memory_ref(memory_id: str) -> str:
+    """Derive the 12-hex-char reference exposed to callers for a memory id.
+
+    Deterministic (no extra storage): the id's hex digits with dashes
+    stripped, truncated to SHORT_REF_LENGTH.
+    """
+    return memory_id.replace("-", "").lower()[:SHORT_REF_LENGTH]
+
+
+def looks_like_short_ref(candidate: str) -> bool:
+    return bool(_SHORT_REF_RE.fullmatch(candidate.strip().lower()))
+
 
 def _cosine_distance(left: bytes, right: bytes) -> float:
     """Compute cosine distance for sqlite-vec float32 BLOBs."""
@@ -238,6 +254,19 @@ def insert_memories(db_path: Path, rows: list[MemoryRow]) -> None:
         conn.commit()
 
     _pool.execute(db_path, _insert)
+
+
+def find_memory_ids_by_ref(db_path: Path, short_ref: str) -> list[str]:
+    """Find full memory ids whose hex digits (dashes stripped) start with short_ref."""
+
+    def _find(conn: sqlite3.Connection) -> list[str]:
+        rows = conn.execute(
+            "SELECT id FROM memories WHERE REPLACE(id, '-', '') LIKE ? || '%'",
+            (short_ref,),
+        ).fetchall()
+        return [str(row["id"]) for row in rows]
+
+    return _pool.execute(db_path, _find)
 
 
 def delete_memory(db_path: Path, memory_id: str) -> bool:

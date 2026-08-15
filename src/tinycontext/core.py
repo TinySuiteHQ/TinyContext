@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from tinycontext.config import ConfigInput, resolve_config
-from tinycontext.errors import EmptyMemoryError, MemoryNotFoundError, RecallBudgetError
+from tinycontext.errors import (
+    AmbiguousMemoryReferenceError,
+    EmptyMemoryError,
+    MemoryNotFoundError,
+    RecallBudgetError,
+)
 from tinycontext.models import MemoryInput, MemoryRow
 from tinycontext.pipelines.memory_recall import memory_recall_run
 from tinycontext.services.embedding_reindex_service import (
@@ -20,7 +25,10 @@ from tinycontext.services.memory_store_service import (
     delete_memory as _delete_memory_row,
     embedding_model_mismatch_count,
     embedding_storage_stats,
+    find_memory_ids_by_ref,
     insert_memories,
+    looks_like_short_ref,
+    short_memory_ref,
 )
 from tinycontext.services.token_counter_service import token_count
 
@@ -107,6 +115,7 @@ def save_memories(
         saved.append(
             {
                 "id": memory_id,
+                "ref": short_memory_ref(memory_id),
                 "session_id": session_id,
                 "content_tokens": token_count(content, encoding_name),
                 "created_at": created_at,
@@ -173,10 +182,23 @@ def delete_memory(
 
     resolved = _resolved_values(config)
     db_path = Path(str(resolved["memory_db_path"]))
-    deleted = _delete_memory_row(db_path, memory_id)
+
+    resolved_id = memory_id
+    if looks_like_short_ref(memory_id):
+        matches = find_memory_ids_by_ref(db_path, memory_id.lower())
+        if not matches:
+            raise MemoryNotFoundError(f"no memory found with ref {memory_id!r}")
+        if len(matches) > 1:
+            raise AmbiguousMemoryReferenceError(
+                f"ref {memory_id!r} matches {len(matches)} memories; "
+                "use the full id instead"
+            )
+        resolved_id = matches[0]
+
+    deleted = _delete_memory_row(db_path, resolved_id)
     if not deleted:
         raise MemoryNotFoundError(f"no memory found with id {memory_id!r}")
-    return {"id": memory_id, "deleted": True}
+    return {"id": resolved_id, "ref": short_memory_ref(resolved_id), "deleted": True}
 
 
 def start_background_reembed_if_needed(config: ConfigInput | None = None) -> str | None:

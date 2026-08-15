@@ -9,11 +9,13 @@ from unittest.mock import patch
 from tinycontext import MemoryInput, delete_memory, recall_memories, save_memories
 from tinycontext.core import describe_embedding_drift
 from tinycontext.errors import (
+    AmbiguousMemoryReferenceError,
     EmptyMemoryError,
     MemoryNotFoundError,
     SessionNotFoundError,
 )
-from tinycontext.services.memory_store_service import close_connection
+from tinycontext.models import MemoryRow
+from tinycontext.services.memory_store_service import close_connection, insert_memories
 from tests.embedding_fakes import fake_embed_texts, start_fake_embeddings
 
 
@@ -125,8 +127,9 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
             config=self.config,
         )
         memory_id = payload["saved"][0]["id"]
+        ref = payload["saved"][0]["ref"]
         result = delete_memory(memory_id, config=self.config)
-        self.assertEqual(result, {"id": memory_id, "deleted": True})
+        self.assertEqual(result, {"id": memory_id, "ref": ref, "deleted": True})
         recalled = recall_memories("tea", config=self.config)
         self.assertEqual(recalled["memories"], [])
 
@@ -138,6 +141,54 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(EmptyMemoryError):
             delete_memory("   ", config=self.config)
 
+    def test_delete_memory_by_short_ref(self) -> None:
+        payload = save_memories(
+            [MemoryInput(content="delete me by ref")],
+            config=self.config,
+        )
+        record = payload["saved"][0]
+        result = delete_memory(record["ref"], config=self.config)
+        self.assertEqual(result["id"], record["id"])
+        self.assertTrue(result["deleted"])
+        recalled = recall_memories("delete me by ref", config=self.config)
+        self.assertEqual(recalled["memories"], [])
+
+    def test_delete_memory_unknown_ref_raises_not_found(self) -> None:
+        with self.assertRaises(MemoryNotFoundError):
+            delete_memory("aaaaaaaaaaaa", config=self.config)
+
+    def test_delete_memory_ambiguous_ref_raises(self) -> None:
+        db_path = Path(self.config["memory_db_path"])
+        insert_memories(
+            db_path,
+            [
+                MemoryRow(
+                    id="aaaaaaaaaaaa0001",
+                    session_id=None,
+                    content="one",
+                    created_at="2026-01-01T00:00:00Z",
+                ),
+                MemoryRow(
+                    id="aaaaaaaaaaaa0002",
+                    session_id=None,
+                    content="two",
+                    created_at="2026-01-01T00:00:00Z",
+                ),
+            ],
+        )
+        with self.assertRaises(AmbiguousMemoryReferenceError):
+            delete_memory("aaaaaaaaaaaa", config=self.config)
+
+    def test_delete_memory_still_accepts_full_uuid(self) -> None:
+        payload = save_memories(
+            [MemoryInput(content="delete me by full id")],
+            config=self.config,
+        )
+        memory_id = payload["saved"][0]["id"]
+        result = delete_memory(memory_id, config=self.config)
+        self.assertEqual(result["id"], memory_id)
+        self.assertTrue(result["deleted"])
+
     def test_dense_similarity_recalls_a_semantic_match(self) -> None:
         save_memories(
             [
@@ -148,3 +199,19 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
         )
         payload = recall_memories("canine health", config=self.config)
         self.assertIn("Dog", payload["memories"][0]["content"])
+
+    def test_relevance_reflects_absolute_similarity_not_just_rank(self) -> None:
+        # RRF fuses ranks, not scores: the sole candidate in a pool always
+        # ranks #1 in both signals and gets rrf_similarity == 1.0, even when
+        # it has nothing to do with the query. relevance must not be "high"
+        # (or even "medium") purely on that rank-based signal.
+        save_memories(
+            [MemoryInput(content="User enjoys hiking on weekends")],
+            config=self.config,
+        )
+        payload = recall_memories("Python backend framework", config=self.config)
+        self.assertEqual(len(payload["memories"]), 1)
+        memory = payload["memories"][0]
+        self.assertEqual(memory["scores"]["rrf"], 1.0)
+        self.assertEqual(memory["scores"]["dense"], 0.0)
+        self.assertEqual(memory["relevance"], "low")

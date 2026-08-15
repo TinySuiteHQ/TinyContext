@@ -189,8 +189,8 @@ and self-contained (understandable without the surrounding chat). Do not save
 one-off task details, or anything already obvious from the code/repo itself.
 
 Use delete_memory when the user asks to forget, remove, or correct something
-that was previously saved. Recall first to find the memory's id, then delete
-by that id.
+that was previously saved. Recall first to find the memory's ref (the short
+hex id on each <memory> tag), then delete by that ref.
 
 A <notice> tag in a response is informational, not an error — proceed with
 whatever results came back.
@@ -230,11 +230,12 @@ def _format_recalled_memories(payload: dict[str, Any]) -> str:
         lines.append("No relevant memories were found.")
     else:
         for index, memory in enumerate(memories, start=1):
+            ref = str(memory["ref"])
             relevance = str(memory["relevance"])
             created_at = quoteattr(str(memory["created_at"]))
             lines.extend(
                 (
-                    f'<memory index="{index}" relevance="{relevance}" '
+                    f'<memory index="{index}" ref="{ref}" relevance="{relevance}" '
                     f"created_at={created_at}>",
                     escape(str(memory["content"])),
                     "</memory>",
@@ -329,14 +330,19 @@ async def recall_memories_tool(
     name="delete_memory",
     title="Delete Memory",
     description=(
-        "Permanently delete a single stored memory by id. Use recall_memories "
-        "first to find the id of the memory to remove."
+        "Permanently delete a single stored memory by ref (or full id). Use "
+        "recall_memories first to find the ref of the memory to remove."
     ),
 )
 async def delete_memory_tool(
     memory_id: Annotated[
         str,
-        Field(description="id of the memory to delete, as returned by save_memories or recall_memories."),
+        Field(
+            description=(
+                "ref or full id of the memory to delete, as returned by "
+                "save_memories or recall_memories."
+            )
+        ),
     ],
 ) -> dict[str, Any]:
     started = time.monotonic()

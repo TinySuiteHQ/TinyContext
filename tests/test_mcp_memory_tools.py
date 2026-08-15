@@ -6,13 +6,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from tinycontext.errors import AmbiguousMemoryReferenceError, MemoryNotFoundError
+from tinycontext.models import MemoryRow
 from tinycontext.servers.mcp_server import (
     delete_memory_tool,
     mcp,
     recall_memories_tool,
     save_memories_tool,
 )
-from tinycontext.services.memory_store_service import close_connection
+from tinycontext.services.memory_store_service import close_connection, insert_memories
 from tests.embedding_fakes import fake_embed_texts, start_fake_embeddings
 
 
@@ -50,14 +52,57 @@ class McpMemoryToolTests(unittest.IsolatedAsyncioTestCase):
             "tinycontext.servers.mcp_server.load_context_config",
             return_value=self.config,
         ):
-            await _fn(save_memories_tool)(
+            saved = await _fn(save_memories_tool)(
                 [{"content": "user likes concise answers"}],
             )
             payload = await _fn(recall_memories_tool)("concise answers")
+        ref = saved["saved"][0]["ref"]
         self.assertIn('<recalled_memories current_time="', payload)
-        self.assertIn('<memory index="1" relevance="high" created_at="', payload)
+        self.assertIn(
+            f'<memory index="1" ref="{ref}" relevance="high" created_at="', payload
+        )
         self.assertIn("user likes concise answers", payload)
         self.assertIn("</memory>", payload)
+
+    async def test_delete_memory_tool_accepts_short_ref(self) -> None:
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            saved = await _fn(save_memories_tool)(
+                [{"content": "delete me via ref"}],
+            )
+            ref = saved["saved"][0]["ref"]
+            payload = await _fn(delete_memory_tool)(ref)
+        self.assertEqual(payload["id"], saved["saved"][0]["id"])
+        self.assertTrue(payload["deleted"])
+
+    async def test_delete_memory_tool_maps_ambiguous_ref(self) -> None:
+        db_path = Path(self.config["memory_db_path"])
+        insert_memories(
+            db_path,
+            [
+                MemoryRow(
+                    id="aaaaaaaaaaaa0001",
+                    session_id=None,
+                    content="one",
+                    created_at="2026-01-01T00:00:00Z",
+                ),
+                MemoryRow(
+                    id="aaaaaaaaaaaa0002",
+                    session_id=None,
+                    content="two",
+                    created_at="2026-01-01T00:00:00Z",
+                ),
+            ],
+        )
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            with self.assertRaises(ValueError) as ctx:
+                await _fn(delete_memory_tool)("aaaaaaaaaaaa")
+        self.assertIn("ambiguous_memory_reference", str(ctx.exception))
 
     async def test_recall_memories_tool_escapes_memory_boundaries(self) -> None:
         with patch(
@@ -135,7 +180,10 @@ class McpMemoryToolTests(unittest.IsolatedAsyncioTestCase):
             )
             memory_id = saved["saved"][0]["id"]
             payload = await _fn(delete_memory_tool)(memory_id)
-        self.assertEqual(payload, {"id": memory_id, "deleted": True})
+        self.assertEqual(
+            payload,
+            {"id": memory_id, "ref": saved["saved"][0]["ref"], "deleted": True},
+        )
 
     async def test_delete_memory_tool_maps_not_found_error(self) -> None:
         with patch(

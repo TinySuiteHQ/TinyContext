@@ -77,7 +77,25 @@ class FastApiMemoryEndpointTests(unittest.IsolatedAsyncioTestCase):
             payload = await delete_memory_endpoint(
                 DeleteMemoryRequest(memory_id=memory_id)
             )
-        self.assertEqual(payload, {"id": memory_id, "deleted": True})
+        self.assertEqual(
+            payload,
+            {"id": memory_id, "ref": saved["saved"][0]["ref"], "deleted": True},
+        )
+
+    async def test_delete_memory_endpoint_accepts_short_ref(self) -> None:
+        with patch(
+            "tinycontext.servers.fastapi_server.load_context_config",
+            return_value=self.config,
+        ):
+            saved = await save_memories_endpoint(
+                SaveMemoriesRequest(
+                    memories=[MemoryInputModel(content="forget this too")],
+                )
+            )
+            ref = saved["saved"][0]["ref"]
+            payload = await delete_memory_endpoint(DeleteMemoryRequest(memory_id=ref))
+        self.assertEqual(payload["id"], saved["saved"][0]["id"])
+        self.assertTrue(payload["deleted"])
 
     async def test_delete_memory_maps_not_found_error(self) -> None:
         with patch(

@@ -12,6 +12,7 @@ from tinycontext.services.memory_store_service import (
     fetch_dense_scores,
     fetch_sparse_scores,
     session_exists,
+    short_memory_ref,
     update_memory_embeddings,
 )
 from tinycontext.services.token_counter_service import token_count
@@ -19,6 +20,17 @@ from tinycontext.services.token_counter_service import token_count
 
 _HIGH_RELEVANCE_THRESHOLD = 0.90
 _MEDIUM_RELEVANCE_THRESHOLD = 0.75
+
+# RRF similarity is rank-relative: it measures how a candidate ranks against
+# the *other* candidates in this pool, not how semantically close it actually
+# is to the query. With a small or uniformly-weak pool (e.g. one memory in a
+# session), a candidate can trivially rank #1 in both signals -- and score
+# rrf_similarity == 1.0 -- while being unrelated to the query. These floors on
+# the raw dense cosine similarity (an absolute, pool-independent measure) stop
+# a rank-only "best of a bad pool" match from being labeled high/medium. The
+# values are conservative defaults, not calibrated per embedding model.
+_HIGH_DENSE_FLOOR = 0.55
+_MEDIUM_DENSE_FLOOR = 0.35
 
 
 def _utc_now() -> datetime:
@@ -39,10 +51,13 @@ def _rank_by_score(scores: list[float]) -> dict[int, int]:
     }
 
 
-def _relevance_label(rrf_similarity: float) -> str:
-    if rrf_similarity >= _HIGH_RELEVANCE_THRESHOLD:
+def _relevance_label(rrf_similarity: float, dense_score: float) -> str:
+    if rrf_similarity >= _HIGH_RELEVANCE_THRESHOLD and dense_score >= _HIGH_DENSE_FLOOR:
         return "high"
-    if rrf_similarity >= _MEDIUM_RELEVANCE_THRESHOLD:
+    if (
+        rrf_similarity >= _MEDIUM_RELEVANCE_THRESHOLD
+        and dense_score >= _MEDIUM_DENSE_FLOOR
+    ):
         return "medium"
     return "low"
 
@@ -158,7 +173,7 @@ def memory_recall_run(
                     "dense_rank": dense_rank,
                     "rrf_score": rrf_score,
                     "rrf_similarity": rrf_similarity,
-                    "relevance": _relevance_label(rrf_similarity),
+                    "relevance": _relevance_label(rrf_similarity, dense_values[index]),
                 },
             )
         )
@@ -210,6 +225,7 @@ def _memory_payload(
 ) -> dict[str, Any]:
     return {
         "id": row.id,
+        "ref": short_memory_ref(row.id),
         "content": row.content,
         "rank": rank,
         "relevance": str(retrieval["relevance"]),
