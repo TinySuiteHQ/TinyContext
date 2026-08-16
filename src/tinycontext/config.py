@@ -17,6 +17,7 @@ def default_config() -> dict[str, Any]:
         "memory_db_path": str(native_memory_db_path()),
         "recall_top_k": 10,
         "recall_max_tokens": 2000,
+        "profile_max_tokens": 500,
         "encoding_name": "o200k_base",
         "models_dir": str(native_models_dir()),
         "embedding_model": "fast",
@@ -76,7 +77,12 @@ def normalize_config(
         base_dir=resolved_base_dir,
     )
 
-    for key in ("recall_top_k", "recall_max_tokens", "embedding_batch_size"):
+    for key in (
+        "recall_top_k",
+        "recall_max_tokens",
+        "profile_max_tokens",
+        "embedding_batch_size",
+    ):
         try:
             value = int(config[key])
         except (TypeError, ValueError) as exc:

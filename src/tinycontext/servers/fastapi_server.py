@@ -57,6 +57,7 @@ async def _prepare_embedding_model() -> None:
 
 class MemoryInputModel(BaseModel):
     content: str = Field(..., min_length=1)
+    kind: str = Field(default="episodic")
 
 
 class SaveMemoriesRequest(BaseModel):
@@ -95,7 +96,7 @@ def _raise_memory_http_error(exc: Exception) -> None:
 
 
 def _to_memory_inputs(items: list[MemoryInputModel]) -> list[MemoryInput]:
-    return [MemoryInput(content=item.content) for item in items]
+    return [MemoryInput(content=item.content, kind=item.kind) for item in items]
 
 
 @app.get("/health")

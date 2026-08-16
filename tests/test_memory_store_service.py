@@ -74,6 +74,45 @@ class MemoryStoreServiceTests(unittest.TestCase):
         rows = fetch_candidates(self.db_path, session_id="s1")
         self.assertEqual([row.id for row in rows], ["m1"])
 
+    def test_fetch_filters_by_kind(self) -> None:
+        insert_memories(
+            self.db_path,
+            [
+                MemoryRow(
+                    id="m1",
+                    session_id="s1",
+                    content="episodic fact",
+                    created_at="2026-06-30T10:00:00Z",
+                    kind="episodic",
+                ),
+                MemoryRow(
+                    id="m2",
+                    session_id=None,
+                    content="call the user Marcell",
+                    created_at="2026-06-30T10:01:00Z",
+                    kind="profile",
+                ),
+            ],
+        )
+        self.assertEqual(
+            [row.id for row in fetch_candidates(self.db_path, kind="episodic")],
+            ["m1"],
+        )
+        self.assertEqual(
+            [row.id for row in fetch_candidates(self.db_path, kind="profile")],
+            ["m2"],
+        )
+        self.assertEqual(
+            {row.id for row in fetch_candidates(self.db_path)}, {"m1", "m2"}
+        )
+        self.assertEqual(
+            [row.id for row in fetch_recent_memories(self.db_path, kind="profile")],
+            ["m2"],
+        )
+        row = fetch_memory_by_id(self.db_path, "m2")
+        assert row is not None
+        self.assertEqual(row.kind, "profile")
+
     def test_fetch_recent_orders_ties_by_insertion_and_applies_limit(self) -> None:
         insert_memories(
             self.db_path,
@@ -257,6 +296,13 @@ class MemoryStoreServiceTests(unittest.TestCase):
         self.assertEqual(list(scores), ["near", "far"])
         self.assertAlmostEqual(scores["near"], 1.0)
         self.assertAlmostEqual(scores["far"], 0.0)
+        profile_scores = fetch_dense_scores(
+            self.db_path,
+            [1.0, 0.0],
+            embedding_model="test-model",
+            kind="profile",
+        )
+        self.assertEqual(profile_scores, {})
         close_connection(self.db_path)
         connection = sqlite3.connect(self.db_path)
         try:

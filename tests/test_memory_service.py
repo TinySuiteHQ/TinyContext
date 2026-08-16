@@ -17,6 +17,7 @@ from tinycontext.core import describe_embedding_drift
 from tinycontext.errors import (
     AmbiguousMemoryReferenceError,
     EmptyMemoryError,
+    InvalidMemoryKindError,
     MemoryAlreadySupersededError,
     MemoryNotFoundError,
     RecallBudgetError,
@@ -443,6 +444,106 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
         recall_memories(config=self.config)
         db_path = Path(self.config["memory_db_path"])
         self.assertEqual(fetch_candidates(db_path)[0].recall_count, 0)
+
+    def test_save_memories_rejects_invalid_kind(self) -> None:
+        with self.assertRaises(InvalidMemoryKindError):
+            save_memories(
+                [MemoryInput(content="User likes tea", kind="bogus")],
+                config=self.config,
+            )
+
+    def test_profile_memory_is_global_regardless_of_session_id(self) -> None:
+        payload = save_memories(
+            [MemoryInput(content="Call the user Marcell", kind="profile")],
+            session_id="session-a",
+            config=self.config,
+        )
+        self.assertIsNone(payload["saved"][0]["session_id"])
+        self.assertEqual(payload["saved"][0]["kind"], "profile")
+
+    def test_profile_memory_excluded_from_ranked_and_recent_lists(self) -> None:
+        save_memories(
+            [
+                MemoryInput(content="Call the user Marcell", kind="profile"),
+                MemoryInput(content="User prefers Python for backend work"),
+            ],
+            config=self.config,
+        )
+        ranked = recall_memories("Python backend", config=self.config)
+        self.assertEqual(len(ranked["memories"]), 1)
+        self.assertIn("Python", ranked["memories"][0]["content"])
+
+        recent = recall_memories(config=self.config)
+        self.assertEqual(
+            [memory["content"] for memory in recent["memories"]],
+            ["User prefers Python for backend work"],
+        )
+
+    def test_profile_block_attached_to_every_recall_response(self) -> None:
+        save_memories(
+            [MemoryInput(content="Call the user Marcell", kind="profile")],
+            config=self.config,
+        )
+        save_memories(
+            [MemoryInput(content="Project uses SQLite")],
+            config=self.config,
+        )
+        ranked = recall_memories("SQLite", config=self.config)
+        self.assertEqual(len(ranked["profile"]), 1)
+        self.assertEqual(ranked["profile"][0]["content"], "Call the user Marcell")
+
+        recent = recall_memories(config=self.config)
+        self.assertEqual(len(recent["profile"]), 1)
+        self.assertEqual(recent["profile"][0]["content"], "Call the user Marcell")
+
+    def test_profile_block_empty_when_no_profile_memories(self) -> None:
+        save_memories([MemoryInput(content="Project uses SQLite")], config=self.config)
+        payload = recall_memories("SQLite", config=self.config)
+        self.assertEqual(payload["profile"], [])
+
+    def test_profile_block_respects_its_own_token_budget(self) -> None:
+        save_memories(
+            [
+                MemoryInput(content="older profile fact", kind="profile"),
+                MemoryInput(
+                    content="newest profile fact with several words",
+                    kind="profile",
+                ),
+            ],
+            config=self.config,
+        )
+        payload = recall_memories(
+            config=dict(self.config, profile_max_tokens=1),
+        )
+        self.assertEqual(len(payload["profile"]), 1)
+        self.assertEqual(
+            payload["profile"][0]["content"], "newest profile fact with several words"
+        )
+
+    def test_profile_dedup_scoped_separately_from_episodic(self) -> None:
+        save_memories(
+            [MemoryInput(content="User likes tea")],
+            config=self.config,
+        )
+        payload = save_memories(
+            [MemoryInput(content="User likes tea", kind="profile")],
+            config=self.config,
+        )
+        self.assertEqual(len(payload["saved"]), 1)
+        self.assertNotIn("skipped_duplicates", payload)
+
+    def test_update_memory_preserves_profile_kind(self) -> None:
+        saved = save_memories(
+            [MemoryInput(content="Call the user Marc", kind="profile")],
+            config=self.config,
+        )
+        old_id = saved["saved"][0]["id"]
+        update_memory(old_id, "Call the user Marcell", config=self.config)
+        payload = recall_memories(config=self.config)
+        self.assertEqual(
+            [memory["content"] for memory in payload["profile"]],
+            ["Call the user Marcell"],
+        )
 
     def test_relevance_reflects_absolute_similarity_not_just_rank(self) -> None:
         # RRF fuses ranks, not scores: the sole candidate in a pool always

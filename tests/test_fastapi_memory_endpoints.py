@@ -67,6 +67,31 @@ class FastApiMemoryEndpointTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertGreaterEqual(len(payload["memories"]), 1)
 
+    async def test_recall_memories_endpoint_includes_profile_block(self) -> None:
+        with patch(
+            "tinycontext.servers.fastapi_server.load_context_config",
+            return_value=self.config,
+        ):
+            await save_memories_endpoint(
+                SaveMemoriesRequest(
+                    memories=[
+                        MemoryInputModel(content="Call the user Marcell", kind="profile")
+                    ],
+                )
+            )
+            await save_memories_endpoint(
+                SaveMemoriesRequest(
+                    memories=[MemoryInputModel(content="project uses sqlite")],
+                )
+            )
+            payload = await recall_memories_endpoint(
+                RecallMemoriesRequest(query="sqlite")
+            )
+        self.assertEqual(len(payload["profile"]), 1)
+        self.assertEqual(payload["profile"][0]["content"], "Call the user Marcell")
+        self.assertEqual(len(payload["memories"]), 1)
+        self.assertEqual(payload["memories"][0]["content"], "project uses sqlite")
+
     async def test_recall_memories_endpoint_recent_mode_defaults_and_overrides(self) -> None:
         with patch(
             "tinycontext.servers.fastapi_server.load_context_config",

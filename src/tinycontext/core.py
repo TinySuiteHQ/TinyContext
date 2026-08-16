@@ -11,12 +11,13 @@ from tinycontext.config import ConfigInput, resolve_config
 from tinycontext.errors import (
     AmbiguousMemoryReferenceError,
     EmptyMemoryError,
+    InvalidMemoryKindError,
     MemoryAlreadySupersededError,
     MemoryNotFoundError,
     RecallBudgetError,
     SessionNotFoundError,
 )
-from tinycontext.models import MemoryInput, MemoryRow
+from tinycontext.models import MEMORY_KINDS, MemoryInput, MemoryRow
 from tinycontext.pipelines.memory_recall import memory_recall_run
 from tinycontext.services.embedding_reindex_service import (
     ensure_background_reindex,
@@ -80,13 +81,18 @@ def save_memories(
     notice = _kick_off_background_reindex(resolved, db_path)
     encoding_name = str(resolved["encoding_name"])
     contents: list[str] = []
-    normalized_items: list[tuple[MemoryInput, str]] = []
+    normalized_items: list[tuple[str, str]] = []
     for item in memories:
         content = item.content.strip()
         if not content:
             raise EmptyMemoryError("memory content must not be empty")
+        kind = (item.kind or "episodic").strip()
+        if kind not in MEMORY_KINDS:
+            raise InvalidMemoryKindError(
+                f"kind must be one of {sorted(MEMORY_KINDS)}, got {kind!r}"
+            )
         contents.append(str(resolved["dense_document_prefix"]) + content)
-        normalized_items.append((item, content))
+        normalized_items.append((content, kind))
 
     vectors = embed_texts(
         contents,
@@ -106,12 +112,17 @@ def save_memories(
     dedup_threshold = float(resolved["dedup_similarity_threshold"])
     saved: list[dict[str, Any]] = []
     skipped_duplicates: list[dict[str, Any]] = []
-    for (item, content), vector in zip(normalized_items, vectors, strict=True):
+    for (content, kind), vector in zip(normalized_items, vectors, strict=True):
+        # Profile facts are global to the store (not scoped to a session),
+        # since identity/preference facts apply regardless of which
+        # project/session is active.
+        item_session_id = None if kind == "profile" else session_id
         scores = fetch_dense_scores(
             db_path,
             vector,
             embedding_model=model_key,
-            session_id=session_id,
+            session_id=item_session_id,
+            kind=kind,
         )
         if scores:
             duplicate_id, similarity = max(scores.items(), key=lambda kv: kv[1])
@@ -127,19 +138,21 @@ def save_memories(
         created_at = _utc_now_iso()
         row = MemoryRow(
             id=memory_id,
-            session_id=session_id,
+            session_id=item_session_id,
             content=content,
             created_at=created_at,
             embedding=vector,
             embedding_model=model_key,
             embedding_dimensions=len(vector),
+            kind=kind,
         )
         insert_memories(db_path, [row])
         saved.append(
             {
                 "id": memory_id,
                 "ref": short_memory_ref(memory_id),
-                "session_id": session_id,
+                "session_id": item_session_id,
+                "kind": kind,
                 "content_tokens": token_count(content, encoding_name),
                 "created_at": created_at,
             }
@@ -180,13 +193,15 @@ def recall_memories(
     db_path = Path(str(resolved["memory_db_path"]))
 
     if not query:
-        return _recall_recent_memories(
+        result = _recall_recent_memories(
             session_id=session_id,
             max_tokens=max_tokens,
             top_k=top_k or _RECENT_MODE_DEFAULT_TOP_K,
             resolved=resolved,
             db_path=db_path,
         )
+        result["profile"] = _fetch_profile_block(resolved, db_path)
+        return result
 
     notice = _kick_off_background_reindex(resolved, db_path)
     result = memory_recall_run(
@@ -211,7 +226,35 @@ def recall_memories(
     )
     if notice:
         result["notice"] = notice
+    result["profile"] = _fetch_profile_block(resolved, db_path)
     return result
+
+
+def _fetch_profile_block(resolved: dict[str, Any], db_path: Path) -> list[dict[str, Any]]:
+    """Fetch the durable, always-surfaced profile pool, trimmed to its own budget.
+
+    Profile memories are global to the store (session_id=None), newest-first,
+    and not semantically ranked -- the pool is small by design, so every
+    recall attaches it unconditionally instead of requiring a separate call.
+    """
+    rows = fetch_recent_memories(db_path, session_id=None, kind="profile")
+    if not rows:
+        return []
+
+    encoding_name = str(resolved["encoding_name"])
+    profile_max_tokens = int(resolved["profile_max_tokens"])
+    selected: list[dict[str, Any]] = []
+    total_tokens = 0
+    for rank, row in enumerate(rows, start=1):
+        content_tokens = token_count(row.content, encoding_name)
+        if not selected and content_tokens > profile_max_tokens:
+            selected.append(_recent_memory_payload(row, rank, content_tokens))
+            break
+        if selected and total_tokens + content_tokens > profile_max_tokens:
+            break
+        selected.append(_recent_memory_payload(row, rank, content_tokens))
+        total_tokens += content_tokens
+    return selected
 
 
 def _recall_recent_memories(
@@ -223,7 +266,9 @@ def _recall_recent_memories(
     db_path: Path,
 ) -> dict[str, Any]:
     """Return the newest durable memories within the configured token budget."""
-    rows = fetch_recent_memories(db_path, session_id=session_id, limit=top_k)
+    rows = fetch_recent_memories(
+        db_path, session_id=session_id, kind="episodic", limit=top_k
+    )
     if session_id is not None and not rows:
         raise SessionNotFoundError(f"session not found: {session_id}")
 
@@ -337,6 +382,7 @@ def update_memory(
         embedding=vector,
         embedding_model=model_key,
         embedding_dimensions=len(vector),
+        kind=old_row.kind,
     )
     insert_memories(db_path, [new_row])
     supersede_memory(db_path, resolved_id, new_id, superseded_at=created_at)

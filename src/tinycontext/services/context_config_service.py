@@ -29,6 +29,7 @@ def _environment_overrides() -> dict[str, Any]:
     for env_name, config_name in (
         ("TINYCONTEXT_RECALL_TOP_K", "recall_top_k"),
         ("TINYCONTEXT_RECALL_MAX_TOKENS", "recall_max_tokens"),
+        ("TINYCONTEXT_PROFILE_MAX_TOKENS", "profile_max_tokens"),
         ("TINYCONTEXT_ENCODING_NAME", "encoding_name"),
         ("TINYCONTEXT_MODELS_DIR", "models_dir"),
         ("TINYCONTEXT_EMBEDDING_MODEL", "embedding_model"),

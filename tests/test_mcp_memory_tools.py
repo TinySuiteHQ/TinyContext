@@ -153,6 +153,41 @@ class McpMemoryToolTests(unittest.IsolatedAsyncioTestCase):
                 await _fn(save_memories_tool)([{"content": "   "}])
         self.assertIn("empty_memory", str(ctx.exception))
 
+    async def test_save_memories_tool_maps_invalid_kind(self) -> None:
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            with self.assertRaises(ValueError) as ctx:
+                await _fn(save_memories_tool)(
+                    [{"content": "user likes tea", "kind": "bogus"}]
+                )
+        self.assertIn("invalid_memory_kind", str(ctx.exception))
+
+    async def test_recall_memories_tool_includes_agent_profile_block(self) -> None:
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            await _fn(save_memories_tool)(
+                [{"content": "Call the user Marcell", "kind": "profile"}],
+            )
+            await _fn(save_memories_tool)([{"content": "user likes concise answers"}])
+            payload = await _fn(recall_memories_tool)("concise answers")
+        self.assertIn("<agent_profile>", payload)
+        self.assertIn("Call the user Marcell", payload)
+        self.assertIn("</agent_profile>", payload)
+        self.assertLess(payload.index("</agent_profile>"), payload.index("<recalled_memories"))
+
+    async def test_recall_memories_tool_omits_agent_profile_block_when_empty(self) -> None:
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            await _fn(save_memories_tool)([{"content": "user likes concise answers"}])
+            payload = await _fn(recall_memories_tool)("concise answers")
+        self.assertNotIn("<agent_profile>", payload)
+
     async def test_recall_memories_tool_includes_notice_during_background_reindex(
         self,
     ) -> None:

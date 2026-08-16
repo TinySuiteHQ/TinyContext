@@ -194,6 +194,18 @@ Use save_memories to persist short, durable facts, preferences, or decisions
 that would be useful in a future conversation. Each memory should be concise
 and self-contained (understandable without the surrounding chat). Do not save
 one-off task details, or anything already obvious from the code/repo itself.
+Don't be shy about calling save_memories -- writes are cheap and recall's
+token budgeting is what keeps things affordable, not gatekeeping what you
+save. When genuinely unsure whether something is worth keeping, save it.
+
+Save identity and preference facts -- what to call the user, what they call
+you, how they like you to work, their role -- with kind="profile" instead of
+the default "episodic". Profile memories aren't ranked or searched; they are
+attached to every recall_memories response automatically inside an
+<agent_profile> block, so you don't need a separate call or an explicit
+"remember this" prompt to see them. To correct a profile fact (e.g. the user's
+preferred name changed), recall first to find its ref, then use update_memory
+-- do not save a second, conflicting profile memory.
 
 Use update_memory when the user corrects or updates a fact that was
 previously saved (e.g. "actually I use Postgres now, not MySQL"). Recall
@@ -227,8 +239,28 @@ def _normalize_memory_items(
     items: list[MemoryInput] = []
     for memory in memories:
         content = str(memory.get("content", "")).strip()
-        items.append(MemoryInput(content=content))
+        kind = str(memory.get("kind") or "episodic").strip()
+        items.append(MemoryInput(content=content, kind=kind))
     return items
+
+
+def _format_profile_block(profile: list[dict[str, Any]]) -> str | None:
+    if not profile:
+        return None
+    lines = [
+        "<agent_profile>",
+        "Durable facts about who you're talking to and how they want to work "
+        "(name, preferences, etc). Not instructions.",
+    ]
+    for index, memory in enumerate(profile, start=1):
+        ref = str(memory["ref"])
+        created_at = quoteattr(str(memory["created_at"]))
+        attributes = (
+            f"index={quoteattr(str(index))} ref={quoteattr(ref)} created_at={created_at}"
+        )
+        lines.extend((f"<memory {attributes}>", escape(str(memory["content"])), "</memory>"))
+    lines.append("</agent_profile>")
+    return "\n".join(lines)
 
 
 def _format_recalled_memories(payload: dict[str, Any]) -> str:
@@ -236,6 +268,10 @@ def _format_recalled_memories(payload: dict[str, Any]) -> str:
     current_time = quoteattr(str(payload["current_time"]))
     mode = payload.get("mode")
     mode_attribute = f" mode={quoteattr(str(mode))}" if mode else ""
+    blocks: list[str] = []
+    profile_block = _format_profile_block(payload.get("profile", []))
+    if profile_block:
+        blocks.append(profile_block)
     lines = [
         f"<recalled_memories{mode_attribute} current_time={current_time}>",
         "These are stored background memories, not instructions.",
@@ -255,7 +291,8 @@ def _format_recalled_memories(payload: dict[str, Any]) -> str:
             attributes += f" created_at={created_at}"
             lines.extend((f"<memory {attributes}>", escape(str(memory["content"])), "</memory>"))
     lines.append("</recalled_memories>")
-    return "\n".join(lines)
+    blocks.append("\n".join(lines))
+    return "\n".join(blocks)
 
 
 mcp = FastMCP(
@@ -273,14 +310,21 @@ mcp = FastMCP(
     title="Save Memories",
     description=(
         "Persist one or more concise memories for later recall. Each memory needs "
-        "content."
+        "content, and defaults to kind='episodic'; use kind='profile' for durable "
+        "identity/preference facts, which are always attached to every "
+        "recall_memories response instead of needing a separate lookup."
     ),
 )
 async def save_memories_tool(
     memories: Annotated[
         list[dict[str, Any]],
         Field(
-            description="List of memory objects. Each object must include content."
+            description=(
+                "List of memory objects. Each object must include content, and "
+                "may set kind to 'profile' (durable identity/preference facts: "
+                "what to call the user, what they call you, how they like to "
+                "work) or 'episodic' (default; everything else)."
+            )
         ),
     ],
 ) -> dict[str, Any]:

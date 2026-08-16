@@ -57,6 +57,12 @@ _LIFECYCLE_COLUMNS: dict[str, str] = {
     "last_recalled_at": "TEXT",
     "recall_count": "INTEGER NOT NULL DEFAULT 0",
 }
+_KIND_COLUMNS: dict[str, str] = {
+    "kind": "TEXT NOT NULL DEFAULT 'episodic'",
+}
+_KIND_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_memories_kind ON memories(kind);
+"""
 
 SHORT_REF_LENGTH = 12
 _SHORT_REF_RE = re.compile(rf"^[0-9a-f]{{{SHORT_REF_LENGTH}}}$")
@@ -132,7 +138,11 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     for name, column_type in _LIFECYCLE_COLUMNS.items():
         if name not in columns:
             conn.execute(f"ALTER TABLE memories ADD COLUMN {name} {column_type}")
+    for name, column_type in _KIND_COLUMNS.items():
+        if name not in columns:
+            conn.execute(f"ALTER TABLE memories ADD COLUMN {name} {column_type}")
     conn.executescript(_EMBEDDING_INDEX_SQL)
+    conn.executescript(_KIND_INDEX_SQL)
     conn.executescript(_FTS_BACKFILL_SQL)
     conn.commit()
 
@@ -230,9 +240,10 @@ def insert_memories(db_path: Path, rows: list[MemoryRow]) -> None:
               created_at,
               embedding,
               embedding_model,
-              embedding_dimensions
+              embedding_dimensions,
+              kind
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -252,6 +263,7 @@ def insert_memories(db_path: Path, rows: list[MemoryRow]) -> None:
                         else len(row.embedding or [])
                     )
                     or None,
+                    row.kind,
                 )
                 for row in rows
             ],
@@ -303,6 +315,7 @@ def _row_to_memory(row: sqlite3.Row) -> MemoryRow:
         superseded_at=row["superseded_at"],
         last_recalled_at=row["last_recalled_at"],
         recall_count=int(row["recall_count"]),
+        kind=str(row["kind"]),
     )
 
 
@@ -322,7 +335,8 @@ def fetch_memory_by_id(db_path: Path, memory_id: str) -> MemoryRow | None:
               superseded_by,
               superseded_at,
               last_recalled_at,
-              recall_count
+              recall_count,
+              kind
             FROM memories
             WHERE id = ?
             """,
@@ -380,6 +394,7 @@ def fetch_candidates(
     db_path: Path,
     *,
     session_id: str | None = None,
+    kind: str | None = None,
     limit: int | None = None,
 ) -> list[MemoryRow]:
     def _fetch(conn: sqlite3.Connection) -> list[MemoryRow]:
@@ -394,7 +409,8 @@ def fetch_candidates(
           superseded_by,
           superseded_at,
           last_recalled_at,
-          recall_count
+          recall_count,
+          kind
         FROM memories
         WHERE superseded_by IS NULL
         """
@@ -402,6 +418,9 @@ def fetch_candidates(
         if session_id is not None:
             query += " AND session_id = ?"
             params.append(session_id)
+        if kind is not None:
+            query += " AND kind = ?"
+            params.append(kind)
         query += " ORDER BY created_at DESC"
         if limit is not None:
             query += " LIMIT ?"
@@ -416,6 +435,7 @@ def fetch_recent_memories(
     db_path: Path,
     *,
     session_id: str | None = None,
+    kind: str | None = None,
     limit: int | None = None,
 ) -> list[MemoryRow]:
     """Fetch stored memories newest-first without touching embeddings."""
@@ -432,7 +452,8 @@ def fetch_recent_memories(
           superseded_by,
           superseded_at,
           last_recalled_at,
-          recall_count
+          recall_count,
+          kind
         FROM memories
         WHERE superseded_by IS NULL
         """
@@ -440,6 +461,9 @@ def fetch_recent_memories(
         if session_id is not None:
             query += " AND session_id = ?"
             params.append(session_id)
+        if kind is not None:
+            query += " AND kind = ?"
+            params.append(kind)
         # rowid makes equal-second and same-batch saves deterministic: the
         # later inserted row is the newer one when timestamps tie.
         query += " ORDER BY created_at DESC, rowid DESC"
@@ -491,6 +515,7 @@ def fetch_dense_scores(
     *,
     embedding_model: str,
     session_id: str | None = None,
+    kind: str | None = None,
 ) -> dict[str, float]:
     """Run cosine similarity inside SQLite through sqlite-vec."""
     if not query_embedding:
@@ -514,6 +539,9 @@ def fetch_dense_scores(
         if session_id is not None:
             query += " AND session_id = ?"
             params.append(session_id)
+        if kind is not None:
+            query += " AND kind = ?"
+            params.append(kind)
         query += " ORDER BY dense_score DESC, created_at DESC"
         rows = conn.execute(query, params).fetchall()
         return {str(row["id"]): float(row["dense_score"]) for row in rows}
@@ -526,6 +554,7 @@ def fetch_sparse_scores(
     query: str,
     *,
     session_id: str | None = None,
+    kind: str | None = None,
 ) -> dict[str, float]:
     """Run BM25 keyword scoring inside SQLite through the FTS5 index.
 
@@ -539,14 +568,18 @@ def fetch_sparse_scores(
 
     def _fetch(conn: sqlite3.Connection) -> dict[str, float]:
         sql = """
-        SELECT id, bm25(memories_fts) AS score
+        SELECT memories_fts.id AS id, bm25(memories_fts) AS score
         FROM memories_fts
+        JOIN memories ON memories.id = memories_fts.id
         WHERE memories_fts MATCH ?
         """
         params: list[Any] = [match_query]
         if session_id is not None:
-            sql += " AND session_id = ?"
+            sql += " AND memories_fts.session_id = ?"
             params.append(session_id)
+        if kind is not None:
+            sql += " AND memories.kind = ?"
+            params.append(kind)
         rows = conn.execute(sql, params).fetchall()
         return {str(row["id"]): -float(row["score"]) for row in rows}
 

@@ -131,6 +131,32 @@ class MemoryFastApiMcpParityTests(unittest.IsolatedAsyncioTestCase):
             mcp_payload,
         )
 
+    async def test_profile_block_parity(self) -> None:
+        save_memories(
+            [MemoryInput(content="Call the user Marcell", kind="profile")],
+            config=self.config,
+        )
+        save_memories(
+            [MemoryInput(content="memory about sqlite storage")],
+            config=self.config,
+        )
+        with patch(
+            "tinycontext.servers.fastapi_server.load_context_config",
+            return_value=self.config,
+        ):
+            fastapi_payload = await recall_memories_endpoint(
+                RecallMemoriesRequest(query="sqlite")
+            )
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            mcp_payload = await _fn(recall_memories_tool)("sqlite")
+        self.assertEqual(len(fastapi_payload["profile"]), 1)
+        self.assertEqual(fastapi_payload["profile"][0]["content"], "Call the user Marcell")
+        self.assertIn("<agent_profile>", mcp_payload)
+        self.assertIn("Call the user Marcell", mcp_payload)
+
     async def test_recent_recall_adapters_share_selected_content_and_order(self) -> None:
         save_memories(
             [MemoryInput(content="first recent"), MemoryInput(content="second recent")],

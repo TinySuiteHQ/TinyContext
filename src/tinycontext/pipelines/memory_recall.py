@@ -87,7 +87,7 @@ def memory_recall_run(
     if session_id is not None and not session_exists(db_path, session_id):
         raise SessionNotFoundError(f"session not found: {session_id}")
 
-    candidates = fetch_candidates(db_path, session_id=session_id)
+    candidates = fetch_candidates(db_path, session_id=session_id, kind="episodic")
     if not candidates:
         current_time = _utc_now()
         return {
@@ -142,8 +142,11 @@ def memory_recall_run(
         query_embedding,
         embedding_model=model_key,
         session_id=session_id,
+        kind="episodic",
     )
-    sparse_scores = fetch_sparse_scores(db_path, query, session_id=session_id)
+    sparse_scores = fetch_sparse_scores(
+        db_path, query, session_id=session_id, kind="episodic"
+    )
     bm25_scores = [float(sparse_scores.get(row.id, 0.0)) for row in candidates]
 
     dense_values = [float(dense_scores.get(row.id, 0.0)) for row in candidates]
