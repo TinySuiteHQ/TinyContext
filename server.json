@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.TinySuiteHQ/tinycontext",
   "description": "Token-light local memory with SQLite hybrid retrieval for MCP agents.",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "websiteUrl": "https://github.com/TinySuiteHQ/TinyContext",
   "repository": {
     "url": "https://github.com/TinySuiteHQ/TinyContext",
@@ -12,7 +12,7 @@
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "docker.io/marcellm01/tinycontext:v0.3.1",
+      "identifier": "docker.io/marcellm01/tinycontext:v0.4.0",
       "transport": {
         "type": "stdio"
       },
@@ -46,7 +46,7 @@
     {
       "registryType": "pypi",
       "identifier": "tinysuite-context",
-      "version": "0.3.1",
+      "version": "0.4.0",
       "transport": {
         "type": "stdio"
       }
