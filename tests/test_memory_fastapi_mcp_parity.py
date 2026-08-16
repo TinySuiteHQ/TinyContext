@@ -9,11 +9,17 @@ from tinycontext import MemoryInput, save_memories
 from tinycontext.servers.fastapi_server import (
     MemoryInputModel,
     RecallMemoriesRequest,
+    RecallRecentMemoriesRequest,
     SaveMemoriesRequest,
     recall_memories_endpoint,
+    recall_recent_memories_endpoint,
     save_memories_endpoint,
 )
-from tinycontext.servers.mcp_server import recall_memories_tool, save_memories_tool
+from tinycontext.servers.mcp_server import (
+    recall_memories_tool,
+    recall_recent_memories_tool,
+    save_memories_tool,
+)
 from tinycontext.services.memory_store_service import close_connection
 from tests.embedding_fakes import start_fake_embeddings
 
@@ -90,3 +96,30 @@ class MemoryFastApiMcpParityTests(unittest.IsolatedAsyncioTestCase):
             f'current_time="{fastapi_payload["current_time"]}"',
             mcp_payload,
         )
+
+    async def test_recent_recall_adapters_share_selected_content_and_order(self) -> None:
+        save_memories(
+            [MemoryInput(content="first recent"), MemoryInput(content="second recent")],
+            config=self.config,
+        )
+        with patch(
+            "tinycontext.servers.fastapi_server.load_context_config",
+            return_value=self.config,
+        ):
+            fastapi_payload = await recall_recent_memories_endpoint(
+                RecallRecentMemoriesRequest(top_k=2)
+            )
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            mcp_payload = await _fn(recall_recent_memories_tool)(top_k=2)
+        self.assertEqual(
+            [memory["content"] for memory in fastapi_payload["memories"]],
+            ["second recent", "first recent"],
+        )
+        self.assertLess(
+            mcp_payload.index("second recent"),
+            mcp_payload.index("first recent"),
+        )
+        self.assertIn('<recalled_memories mode="recent"', mcp_payload)

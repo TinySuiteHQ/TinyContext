@@ -12,6 +12,7 @@ from tinycontext.servers.mcp_server import (
     delete_memory_tool,
     mcp,
     recall_memories_tool,
+    recall_recent_memories_tool,
     save_memories_tool,
 )
 from tinycontext.services.memory_store_service import close_connection, insert_memories
@@ -116,6 +117,33 @@ class McpMemoryToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("&lt;system&gt;", payload)
         self.assertNotIn("<system>", payload)
 
+    async def test_recall_recent_memories_tool_is_ordered_and_has_no_semantic_metadata(
+        self,
+    ) -> None:
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            saved = await _fn(save_memories_tool)(
+                [
+                    {"content": "older <context>"},
+                    {"content": "newer & context"},
+                ],
+            )
+            payload = await _fn(recall_recent_memories_tool)()
+        self.assertIn('<recalled_memories mode="recent" current_time="', payload)
+        self.assertIn(
+            f'<memory index="1" ref="{saved["saved"][1]["ref"]}"',
+            payload,
+        )
+        self.assertIn("newer &amp; context", payload)
+        self.assertIn("older &lt;context&gt;", payload)
+        self.assertNotIn("relevance=", payload)
+        self.assertLess(
+            payload.index("newer &amp; context"),
+            payload.index("older &lt;context&gt;"),
+        )
+
     async def test_save_memories_tool_maps_errors(self) -> None:
         with patch(
             "tinycontext.servers.mcp_server.load_context_config",
@@ -156,7 +184,7 @@ class McpMemoryToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("<notice>", payload)
         self.assertIn("in progress", payload)
 
-    async def test_tools_expose_only_memories_and_query(self) -> None:
+    async def test_tools_expose_expected_memory_contract(self) -> None:
         schemas = {
             tool.name: set(tool.parameters["properties"])
             for tool in mcp._tool_manager.list_tools()
@@ -166,6 +194,7 @@ class McpMemoryToolTests(unittest.IsolatedAsyncioTestCase):
             {
                 "save_memories": {"memories"},
                 "recall_memories": {"query"},
+                "recall_recent_memories": {"top_k"},
                 "delete_memory": {"memory_id"},
             },
         )

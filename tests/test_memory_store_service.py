@@ -12,6 +12,7 @@ from tinycontext.services.memory_store_service import (
     delete_memory,
     embedding_storage_stats,
     fetch_candidates,
+    fetch_recent_memories,
     fetch_dense_scores,
     init_db,
     insert_memories,
@@ -68,6 +69,33 @@ class MemoryStoreServiceTests(unittest.TestCase):
         )
         rows = fetch_candidates(self.db_path, session_id="s1")
         self.assertEqual([row.id for row in rows], ["m1"])
+
+    def test_fetch_recent_orders_ties_by_insertion_and_applies_limit(self) -> None:
+        insert_memories(
+            self.db_path,
+            [
+                MemoryRow(
+                    id="first",
+                    session_id="s1",
+                    content="first",
+                    created_at="2026-06-30T10:00:00Z",
+                ),
+                MemoryRow(
+                    id="second",
+                    session_id="s1",
+                    content="second",
+                    created_at="2026-06-30T10:00:00Z",
+                ),
+                MemoryRow(
+                    id="newest",
+                    session_id="s2",
+                    content="newest",
+                    created_at="2026-06-30T10:01:00Z",
+                ),
+            ],
+        )
+        rows = fetch_recent_memories(self.db_path, session_id="s1", limit=2)
+        self.assertEqual([row.id for row in rows], ["second", "first"])
 
     def test_session_exists(self) -> None:
         self.assertFalse(session_exists(self.db_path, "missing"))

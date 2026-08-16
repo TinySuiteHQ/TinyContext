@@ -324,6 +324,41 @@ def fetch_candidates(
     return _pool.execute(db_path, _fetch)
 
 
+def fetch_recent_memories(
+    db_path: Path,
+    *,
+    session_id: str | None = None,
+    limit: int | None = None,
+) -> list[MemoryRow]:
+    """Fetch stored memories newest-first without touching embeddings."""
+
+    def _fetch(conn: sqlite3.Connection) -> list[MemoryRow]:
+        query = """
+        SELECT
+          id,
+          session_id,
+          content,
+          created_at,
+          embedding_model,
+          embedding_dimensions
+        FROM memories
+        """
+        params: list[Any] = []
+        if session_id is not None:
+            query += " WHERE session_id = ?"
+            params.append(session_id)
+        # rowid makes equal-second and same-batch saves deterministic: the
+        # later inserted row is the newer one when timestamps tie.
+        query += " ORDER BY created_at DESC, rowid DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(int(limit))
+        rows = conn.execute(query, params).fetchall()
+        return [_row_to_memory(row) for row in rows]
+
+    return _pool.execute(db_path, _fetch)
+
+
 def update_memory_embeddings(
     db_path: Path,
     rows: Sequence[tuple[str, Sequence[float]]],

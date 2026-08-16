@@ -5,16 +5,20 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import httpx
 from fastapi import HTTPException
 
 from tinycontext.servers.fastapi_server import (
     DeleteMemoryRequest,
     MemoryInputModel,
     RecallMemoriesRequest,
+    RecallRecentMemoriesRequest,
     SaveMemoriesRequest,
     delete_memory_endpoint,
     recall_memories_endpoint,
+    recall_recent_memories_endpoint,
     save_memories_endpoint,
+    app,
 )
 from tinycontext.services.memory_store_service import close_connection
 from tests.embedding_fakes import start_fake_embeddings
@@ -62,6 +66,63 @@ class FastApiMemoryEndpointTests(unittest.IsolatedAsyncioTestCase):
                 RecallMemoriesRequest(query="sqlite")
             )
         self.assertGreaterEqual(len(payload["memories"]), 1)
+
+    async def test_recall_recent_memories_endpoint_defaults_and_overrides(self) -> None:
+        with patch(
+            "tinycontext.servers.fastapi_server.load_context_config",
+            return_value=self.config,
+        ):
+            await save_memories_endpoint(
+                SaveMemoriesRequest(
+                    memories=[
+                        MemoryInputModel(content=f"recent {index}")
+                        for index in range(6)
+                    ],
+                )
+            )
+            default_payload = await recall_recent_memories_endpoint(
+                RecallRecentMemoriesRequest()
+            )
+            override_payload = await recall_recent_memories_endpoint(
+                RecallRecentMemoriesRequest(top_k=2)
+            )
+        self.assertEqual(len(default_payload["memories"]), 5)
+        self.assertEqual(len(override_payload["memories"]), 2)
+        self.assertEqual(override_payload["mode"], "recent")
+
+    async def test_recall_recent_memories_http_get_post_and_validation(self) -> None:
+        transport = httpx.ASGITransport(app=app)
+        with patch(
+            "tinycontext.servers.fastapi_server.load_context_config",
+            return_value=self.config,
+        ):
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                saved = await client.post(
+                    "/save_memories",
+                    json={
+                        "memories": [
+                            {"content": f"http recent {index}"}
+                            for index in range(6)
+                        ]
+                    },
+                )
+                self.assertEqual(saved.status_code, 200)
+                get_response = await client.get("/recall_recent_memories")
+                post_response = await client.post(
+                    "/recall_recent_memories", json={"top_k": 2}
+                )
+                invalid_get = await client.get(
+                    "/recall_recent_memories", params={"top_k": 0}
+                )
+                invalid_post = await client.post(
+                    "/recall_recent_memories", json={"top_k": 0}
+                )
+        self.assertEqual(get_response.status_code, 200)
+        self.assertEqual(len(get_response.json()["memories"]), 5)
+        self.assertEqual(post_response.status_code, 200)
+        self.assertEqual(len(post_response.json()["memories"]), 2)
+        self.assertEqual(invalid_get.status_code, 422)
+        self.assertEqual(invalid_post.status_code, 422)
 
     async def test_delete_memory_endpoint(self) -> None:
         with patch(

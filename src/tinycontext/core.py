@@ -13,6 +13,7 @@ from tinycontext.errors import (
     EmptyMemoryError,
     MemoryNotFoundError,
     RecallBudgetError,
+    SessionNotFoundError,
 )
 from tinycontext.models import MemoryInput, MemoryRow
 from tinycontext.pipelines.memory_recall import memory_recall_run
@@ -25,6 +26,7 @@ from tinycontext.services.memory_store_service import (
     delete_memory as _delete_memory_row,
     embedding_model_mismatch_count,
     embedding_storage_stats,
+    fetch_recent_memories,
     find_memory_ids_by_ref,
     insert_memories,
     looks_like_short_ref,
@@ -169,6 +171,65 @@ def recall_memories(
     if notice:
         result["notice"] = notice
     return result
+
+
+def recall_recent_memories(
+    *,
+    session_id: str | None = None,
+    top_k: int = 5,
+    config: ConfigInput | None = None,
+) -> dict[str, Any]:
+    """Return the newest durable memories within the configured token budget."""
+    if top_k < 1:
+        raise RecallBudgetError("top_k must be at least 1")
+
+    resolved = _resolved_values(config)
+    db_path = Path(str(resolved["memory_db_path"]))
+    rows = fetch_recent_memories(db_path, session_id=session_id, limit=top_k)
+    if session_id is not None and not rows:
+        raise SessionNotFoundError(f"session not found: {session_id}")
+
+    current_time = _utc_now_iso()
+    selected: list[dict[str, Any]] = []
+    total_tokens = 0
+    truncated = False
+    max_tokens = int(resolved["recall_max_tokens"])
+    encoding_name = str(resolved["encoding_name"])
+    for rank, row in enumerate(rows, start=1):
+        content_tokens = token_count(row.content, encoding_name)
+        if selected and total_tokens + content_tokens > max_tokens:
+            truncated = True
+            break
+        if not selected and content_tokens > max_tokens:
+            truncated = True
+            selected.append(_recent_memory_payload(row, rank, content_tokens))
+            total_tokens = content_tokens
+            break
+        selected.append(_recent_memory_payload(row, rank, content_tokens))
+        total_tokens += content_tokens
+
+    return {
+        "mode": "recent",
+        "current_time": current_time,
+        "memories": selected,
+        "total_tokens": total_tokens,
+        "truncated": truncated,
+    }
+
+
+def _recent_memory_payload(
+    row: MemoryRow,
+    rank: int,
+    content_tokens: int,
+) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "ref": short_memory_ref(row.id),
+        "content": row.content,
+        "rank": rank,
+        "content_tokens": content_tokens,
+        "created_at": row.created_at,
+    }
 
 
 def delete_memory(

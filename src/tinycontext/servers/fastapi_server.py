@@ -5,7 +5,7 @@ import os
 import sys
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from tinycontext import core
@@ -69,6 +69,11 @@ class RecallMemoriesRequest(BaseModel):
     session_id: str | None = None
     max_tokens: int | None = Field(default=None, ge=1)
     top_k: int | None = Field(default=None, ge=1)
+
+
+class RecallRecentMemoriesRequest(BaseModel):
+    session_id: str | None = None
+    top_k: int = Field(default=5, ge=1)
 
 
 class DeleteMemoryRequest(BaseModel):
@@ -153,6 +158,31 @@ async def recall_memories_get(
             max_tokens=max_tokens,
             top_k=top_k,
         )
+    )
+
+
+@app.post("/recall_recent_memories")
+async def recall_recent_memories_endpoint(
+    request: RecallRecentMemoriesRequest,
+) -> dict[str, Any]:
+    config = tenant_config(load_context_config())
+    try:
+        return core.recall_recent_memories(
+            session_id=request.session_id,
+            top_k=request.top_k,
+            config=config,
+        )
+    except MemoryError as exc:
+        _raise_memory_http_error(exc)
+
+
+@app.get("/recall_recent_memories")
+async def recall_recent_memories_get(
+    session_id: str | None = None,
+    top_k: int = Query(default=5, ge=1),
+) -> dict[str, Any]:
+    return await recall_recent_memories_endpoint(
+        RecallRecentMemoriesRequest(session_id=session_id, top_k=top_k)
     )
 
 

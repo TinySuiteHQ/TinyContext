@@ -135,8 +135,16 @@ class HostedTenancyTests(unittest.IsolatedAsyncioTestCase):
                     headers={"X-TinyContext-User-Id": "alice"},
                     json={"query": "only"},
                 )
+                recent_response = await client.get(
+                    "/recall_recent_memories",
+                    headers={"X-TinyContext-User-Id": "alice"},
+                )
         self.assertEqual(
             [row["content"] for row in response.json()["memories"]], ["alice only"]
+        )
+        self.assertEqual(
+            [row["content"] for row in recent_response.json()["memories"]],
+            ["alice only"],
         )
 
     async def test_hosted_mcp_paths_share_the_identity_boundary(self) -> None:

@@ -6,12 +6,19 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tinycontext import MemoryInput, delete_memory, recall_memories, save_memories
+from tinycontext import (
+    MemoryInput,
+    delete_memory,
+    recall_memories,
+    recall_recent_memories,
+    save_memories,
+)
 from tinycontext.core import describe_embedding_drift
 from tinycontext.errors import (
     AmbiguousMemoryReferenceError,
     EmptyMemoryError,
     MemoryNotFoundError,
+    RecallBudgetError,
     SessionNotFoundError,
 )
 from tinycontext.models import MemoryRow
@@ -199,6 +206,82 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
         )
         payload = recall_memories("canine health", config=self.config)
         self.assertIn("Dog", payload["memories"][0]["content"])
+
+    def test_recent_recall_defaults_to_five_and_is_newest_first(self) -> None:
+        save_memories(
+            [MemoryInput(content=f"memory {index}") for index in range(6)],
+            config=self.config,
+        )
+        payload = recall_recent_memories(config=self.config)
+        self.assertEqual(payload["mode"], "recent")
+        self.assertEqual(len(payload["memories"]), 5)
+        self.assertEqual(
+            [memory["content"] for memory in payload["memories"]],
+            [f"memory {index}" for index in range(5, 0, -1)],
+        )
+        self.assertEqual(
+            [memory["rank"] for memory in payload["memories"]],
+            [1, 2, 3, 4, 5],
+        )
+        self.assertNotIn("relevance", payload["memories"][0])
+        self.assertNotIn("scores", payload["memories"][0])
+
+    def test_recent_recall_supports_session_and_custom_count(self) -> None:
+        save_memories(
+            [MemoryInput(content="project one")], session_id="one", config=self.config
+        )
+        save_memories(
+            [MemoryInput(content="project two")], session_id="two", config=self.config
+        )
+        payload = recall_recent_memories(
+            session_id="one", top_k=1, config=self.config
+        )
+        self.assertEqual(
+            [memory["content"] for memory in payload["memories"]],
+            ["project one"],
+        )
+
+    def test_recent_recall_empty_store_and_missing_session(self) -> None:
+        empty = recall_recent_memories(config=self.config)
+        self.assertEqual(empty["memories"], [])
+        self.assertFalse(empty["truncated"])
+        with self.assertRaises(SessionNotFoundError):
+            recall_recent_memories(session_id="missing", config=self.config)
+
+    def test_recent_recall_validates_top_k(self) -> None:
+        with self.assertRaises(RecallBudgetError):
+            recall_recent_memories(top_k=0, config=self.config)
+
+    def test_recent_recall_respects_budget_and_keeps_oversized_newest_memory(self) -> None:
+        save_memories(
+            [
+                MemoryInput(content="older memory"),
+                MemoryInput(content="newest memory with several words"),
+            ],
+            config=self.config,
+        )
+        payload = recall_recent_memories(
+            top_k=2,
+            config=dict(self.config, recall_max_tokens=1),
+        )
+        self.assertEqual(
+            [memory["content"] for memory in payload["memories"]],
+            ["newest memory with several words"],
+        )
+        self.assertTrue(payload["truncated"])
+        self.assertGreater(payload["total_tokens"], 1)
+
+    def test_recent_recall_does_not_compute_embeddings_or_reindex(self) -> None:
+        save_memories([MemoryInput(content="read without embeddings")], config=self.config)
+        with (
+            patch("tinycontext.core.embed_texts", side_effect=AssertionError("embedded")),
+            patch(
+                "tinycontext.core._kick_off_background_reindex",
+                side_effect=AssertionError("reindexed"),
+            ),
+        ):
+            payload = recall_recent_memories(config=self.config)
+        self.assertEqual(payload["memories"][0]["content"], "read without embeddings")
 
     def test_relevance_reflects_absolute_similarity_not_just_rank(self) -> None:
         # RRF fuses ranks, not scores: the sole candidate in a pool always

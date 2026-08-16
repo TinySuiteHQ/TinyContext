@@ -13,10 +13,16 @@ from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
 
-EXPECTED_TOOLS = {"save_memories", "recall_memories", "delete_memory"}
+EXPECTED_TOOLS = {
+    "save_memories",
+    "recall_memories",
+    "recall_recent_memories",
+    "delete_memory",
+}
 EXPECTED_PARAMETERS = {
     "save_memories": {"memories"},
     "recall_memories": {"query"},
+    "recall_recent_memories": {"top_k"},
     "delete_memory": {"memory_id"},
 }
 
