@@ -10,6 +10,7 @@ from tinycontext.services.memory_store_service import close_connection
 from tinycontext.services.memory_store_service import (
     embedding_storage_stats,
     insert_memories,
+    record_recall_hits,
 )
 from tinycontext.models import MemoryRow
 from tests.embedding_fakes import start_fake_embeddings
@@ -107,3 +108,64 @@ class MemoryRecallPipelineTests(unittest.TestCase):
         self.assertEqual(len(payload["memories"]), 1)
         self.assertIn("Python", payload["memories"][0]["content"])
         self.assertEqual(payload["memories"][0]["scores"]["rrf"], 1.0)
+
+    def test_access_weight_narrows_gap_between_tied_candidates(self) -> None:
+        # Different wording, same single-group token overlap ("likes" vs
+        # "preference" both live in the same fake-embedder semantic group),
+        # so both rows backfill to an identical embedding vector -- and
+        # neither shares any term with the query, so BM25 ties at 0 too.
+        # RRF is rank- not value-based, so a raw tie still resolves to a
+        # rank-1/rank-2 split; "newer" (later created_at) sorts first and
+        # wins that split at access_weight=0. "older" only has more
+        # recall_count going for it. With default dense_weight=0.5 (so
+        # sparse_weight=0.5 too) and access_weight pushed to its 1.0 max,
+        # the rank-1-vs-rank-2 advantage access buys "older" exactly cancels
+        # "newer"'s combined dense+sparse advantage -- provably an exact tie.
+        db_path = Path(self.config["memory_db_path"])
+        insert_memories(
+            db_path,
+            [
+                MemoryRow(
+                    id="older-but-recalled",
+                    session_id=None,
+                    content="User has a preference for it",
+                    created_at="2026-01-01T00:00:00Z",
+                ),
+                MemoryRow(
+                    id="newer-but-unrecalled",
+                    session_id=None,
+                    content="User likes it",
+                    created_at="2026-01-01T00:00:01Z",
+                ),
+            ],
+        )
+        record_recall_hits(db_path, ["older-but-recalled"], "2026-01-01T00:00:02Z")
+
+        baseline = memory_recall_run(
+            "something unrelated xyz",
+            session_id=None,
+            max_tokens=100,
+            top_k=2,
+            db_path=db_path,
+            encoding_name=self.config["encoding_name"],
+            access_weight=0.0,
+        )
+        self.assertEqual(baseline["memories"][0]["content"], "User likes it")
+        self.assertGreater(
+            baseline["memories"][0]["scores"]["rrf"],
+            baseline["memories"][1]["scores"]["rrf"],
+        )
+
+        boosted = memory_recall_run(
+            "something unrelated xyz",
+            session_id=None,
+            max_tokens=100,
+            top_k=2,
+            db_path=db_path,
+            encoding_name=self.config["encoding_name"],
+            access_weight=1.0,
+        )
+        self.assertAlmostEqual(
+            boosted["memories"][0]["scores"]["rrf"],
+            boosted["memories"][1]["scores"]["rrf"],
+        )

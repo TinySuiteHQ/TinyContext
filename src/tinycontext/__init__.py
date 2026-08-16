@@ -2,8 +2,8 @@ from tinycontext.config import TinyContextConfig
 from tinycontext.core import (
     delete_memory,
     recall_memories,
-    recall_recent_memories,
     save_memories,
+    update_memory,
 )
 from tinycontext.models import MemoryInput
 
@@ -12,6 +12,6 @@ __all__ = [
     "TinyContextConfig",
     "delete_memory",
     "recall_memories",
-    "recall_recent_memories",
     "save_memories",
+    "update_memory",
 ]

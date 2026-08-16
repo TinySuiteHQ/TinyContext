@@ -65,19 +65,19 @@ class SaveMemoriesRequest(BaseModel):
 
 
 class RecallMemoriesRequest(BaseModel):
-    query: str = Field(..., min_length=1)
+    query: str | None = None
     session_id: str | None = None
     max_tokens: int | None = Field(default=None, ge=1)
     top_k: int | None = Field(default=None, ge=1)
 
 
-class RecallRecentMemoriesRequest(BaseModel):
-    session_id: str | None = None
-    top_k: int = Field(default=5, ge=1)
-
-
 class DeleteMemoryRequest(BaseModel):
     memory_id: str = Field(..., min_length=1)
+
+
+class UpdateMemoryRequest(BaseModel):
+    memory_id: str = Field(..., min_length=1)
+    content: str = Field(..., min_length=1)
 
 
 def _raise_memory_http_error(exc: Exception) -> None:
@@ -146,10 +146,10 @@ async def recall_memories_endpoint(request: RecallMemoriesRequest) -> dict[str, 
 
 @app.get("/recall_memories")
 async def recall_memories_get(
-    query: str,
+    query: str | None = None,
     session_id: str | None = None,
-    max_tokens: int | None = None,
-    top_k: int | None = None,
+    max_tokens: int | None = Query(default=None, ge=1),
+    top_k: int | None = Query(default=None, ge=1),
 ) -> dict[str, Any]:
     return await recall_memories_endpoint(
         RecallMemoriesRequest(
@@ -161,35 +161,19 @@ async def recall_memories_get(
     )
 
 
-@app.post("/recall_recent_memories")
-async def recall_recent_memories_endpoint(
-    request: RecallRecentMemoriesRequest,
-) -> dict[str, Any]:
-    config = tenant_config(load_context_config())
-    try:
-        return core.recall_recent_memories(
-            session_id=request.session_id,
-            top_k=request.top_k,
-            config=config,
-        )
-    except MemoryError as exc:
-        _raise_memory_http_error(exc)
-
-
-@app.get("/recall_recent_memories")
-async def recall_recent_memories_get(
-    session_id: str | None = None,
-    top_k: int = Query(default=5, ge=1),
-) -> dict[str, Any]:
-    return await recall_recent_memories_endpoint(
-        RecallRecentMemoriesRequest(session_id=session_id, top_k=top_k)
-    )
-
-
 @app.post("/delete_memory")
 async def delete_memory_endpoint(request: DeleteMemoryRequest) -> dict[str, Any]:
     config = tenant_config(load_context_config())
     try:
         return core.delete_memory(request.memory_id, config=config)
+    except MemoryError as exc:
+        _raise_memory_http_error(exc)
+
+
+@app.post("/update_memory")
+async def update_memory_endpoint(request: UpdateMemoryRequest) -> dict[str, Any]:
+    config = tenant_config(load_context_config())
+    try:
+        return core.update_memory(request.memory_id, request.content, config=config)
     except MemoryError as exc:
         _raise_memory_http_error(exc)

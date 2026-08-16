@@ -171,11 +171,11 @@ MCP_INSTRUCTIONS = """
 This MCP server exposes four tools:
 
 1. save_memories(memories)
-2. recall_memories(query)
-3. recall_recent_memories(top_k=5)
+2. recall_memories(query=None, top_k=None)
+3. update_memory(memory_id, content)
 4. delete_memory(memory_id)
 
-Use recall_memories before answering whenever the user references
+Use recall_memories with a query before answering whenever the user references
 something that could have been said before: their name, preferences, a project,
 a decision, a person, or anything phrased as "like I mentioned" / "as you know" /
 "remember when". Don't wait for an explicit "check your memory" request — if
@@ -184,19 +184,28 @@ result costs nothing; skipping a call that would have found something does.
 Pass the user's current question or task description as query, not a
 reformulation of it.
 
-Use recall_recent_memories when the chronological continuation of the latest
-stored context matters, such as resuming a recent thread. It is a bounded,
-newest-first view and is not a semantic search. Do not call it unconditionally
-on every turn; use it when recent continuity is relevant.
+Call recall_memories with no query (or top_k=5 and no query) when the
+chronological continuation of the latest stored context matters, such as
+resuming a recent thread, instead. This returns a bounded, newest-first view
+and is not a semantic search. Do not call it unconditionally on every turn;
+use it when recent continuity is relevant.
 
 Use save_memories to persist short, durable facts, preferences, or decisions
 that would be useful in a future conversation. Each memory should be concise
 and self-contained (understandable without the surrounding chat). Do not save
 one-off task details, or anything already obvious from the code/repo itself.
 
-Use delete_memory when the user asks to forget, remove, or correct something
-that was previously saved. Recall first to find the memory's ref (the short
-hex id on each <memory> tag), then delete by that ref.
+Use update_memory when the user corrects or updates a fact that was
+previously saved (e.g. "actually I use Postgres now, not MySQL"). Recall
+first to find the memory's ref, then call update_memory with that ref and
+the corrected content. This preserves history and keeps only the corrected
+version visible to future recalls, instead of leaving a stale, conflicting
+duplicate behind.
+
+Use delete_memory when the user asks to forget or remove something that was
+previously saved outright (not correct it -- use update_memory for that).
+Recall first to find the memory's ref (the short hex id on each <memory>
+tag), then delete by that ref.
 
 A <notice> tag in a response is informational, not an error — proceed with
 whatever results came back.
@@ -297,23 +306,42 @@ async def save_memories_tool(
     name="recall_memories",
     title="Recall Memories",
     description=(
-        "Retrieve prompt-ready memories relevant to query within a token budget. "
-        "Each memory is explicitly bounded and labeled with high, medium, or low "
-        "hybrid relevance. Use this before answering when prior context may help."
+        "Retrieve prompt-ready memories within a token budget. With a query, runs "
+        "hybrid semantic search and labels each memory high, medium, or low "
+        "relevance. With no query, returns the newest stored memories in "
+        "chronological order instead (not semantic search)."
     ),
 )
 async def recall_memories_tool(
     query: Annotated[
-        str,
-        Field(description="Question or task description to match against memories."),
-    ],
+        str | None,
+        Field(
+            default=None,
+            description=(
+                "Question or task description to match against memories. Omit "
+                "for newest-first chronological recall instead of semantic search."
+            ),
+        ),
+    ] = None,
+    top_k: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=1,
+            description=(
+                "Maximum number of memories to return. Defaults to 5 when query "
+                "is omitted, or the configured recall top_k otherwise."
+            ),
+        ),
+    ] = None,
 ) -> str:
     started = time.monotonic()
-    _log(f"recall_memories called query={query!r}")
+    _log(f"recall_memories called query={query!r} top_k={top_k}")
     config = tenant_config(load_context_config())
     try:
         payload = core.recall_memories(
             query,
+            top_k=top_k,
             config=config,
         )
     except MemoryError as exc:
@@ -331,43 +359,38 @@ async def recall_memories_tool(
 
 
 @mcp.tool(
-    name="recall_recent_memories",
-    title="Recall Recent Memories",
+    name="update_memory",
+    title="Update Memory",
     description=(
-        "Retrieve the newest stored memories in chronological order within the "
-        "configured token budget. This is not semantic search."
+        "Supersede a stored memory with corrected content. Use recall_memories "
+        "first to find the ref of the memory to correct."
     ),
 )
-async def recall_recent_memories_tool(
-    top_k: Annotated[
-        int,
+async def update_memory_tool(
+    memory_id: Annotated[
+        str,
         Field(
-            default=5,
-            ge=1,
-            description="Maximum number of newest memories to return.",
+            description=(
+                "ref or full id of the memory to update, as returned by "
+                "save_memories or recall_memories."
+            )
         ),
-    ] = 5,
-) -> str:
+    ],
+    content: Annotated[str, Field(description="Corrected memory content.")],
+) -> dict[str, Any]:
     started = time.monotonic()
-    _log(f"recall_recent_memories called top_k={top_k}")
+    _log(f"update_memory called memory_id={memory_id!r}")
     config = tenant_config(load_context_config())
     try:
-        payload = core.recall_recent_memories(top_k=top_k, config=config)
+        payload = core.update_memory(memory_id, content, config=config)
     except MemoryError as exc:
         elapsed = time.monotonic() - started
         code = MEMORY_ERROR_MAP.get(type(exc), ("internal_error", 500))[0]
-        _log(
-            "recall_recent_memories failed "
-            f"elapsed={elapsed:.2f}s code={code} error={exc!r}"
-        )
+        _log(f"update_memory failed elapsed={elapsed:.2f}s code={code} error={exc!r}")
         raise _memory_tool_error(exc) from exc
     elapsed = time.monotonic() - started
-    _log(
-        "recall_recent_memories returning "
-        f"count={len(payload['memories'])} total_tokens={payload['total_tokens']} "
-        f"elapsed={elapsed:.2f}s"
-    )
-    return _format_recalled_memories(payload)
+    _log(f"update_memory returning ref={payload['ref']} elapsed={elapsed:.2f}s")
+    return payload
 
 
 @mcp.tool(

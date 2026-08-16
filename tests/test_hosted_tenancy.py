@@ -136,7 +136,7 @@ class HostedTenancyTests(unittest.IsolatedAsyncioTestCase):
                     json={"query": "only"},
                 )
                 recent_response = await client.get(
-                    "/recall_recent_memories",
+                    "/recall_memories",
                     headers={"X-TinyContext-User-Id": "alice"},
                 )
         self.assertEqual(

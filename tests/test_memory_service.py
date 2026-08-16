@@ -10,19 +10,24 @@ from tinycontext import (
     MemoryInput,
     delete_memory,
     recall_memories,
-    recall_recent_memories,
     save_memories,
+    update_memory,
 )
 from tinycontext.core import describe_embedding_drift
 from tinycontext.errors import (
     AmbiguousMemoryReferenceError,
     EmptyMemoryError,
+    MemoryAlreadySupersededError,
     MemoryNotFoundError,
     RecallBudgetError,
     SessionNotFoundError,
 )
 from tinycontext.models import MemoryRow
-from tinycontext.services.memory_store_service import close_connection, insert_memories
+from tinycontext.services.memory_store_service import (
+    close_connection,
+    fetch_candidates,
+    insert_memories,
+)
 from tests.embedding_fakes import fake_embed_texts, start_fake_embeddings
 
 
@@ -224,7 +229,7 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
                 for index in range(6)
             ],
         )
-        payload = recall_recent_memories(config=self.config)
+        payload = recall_memories(config=self.config)
         self.assertEqual(payload["mode"], "recent")
         self.assertEqual(len(payload["memories"]), 5)
         self.assertEqual(
@@ -245,7 +250,7 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
         save_memories(
             [MemoryInput(content="project two")], session_id="two", config=self.config
         )
-        payload = recall_recent_memories(
+        payload = recall_memories(
             session_id="one", top_k=1, config=self.config
         )
         self.assertEqual(
@@ -254,15 +259,15 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_recent_recall_empty_store_and_missing_session(self) -> None:
-        empty = recall_recent_memories(config=self.config)
+        empty = recall_memories(config=self.config)
         self.assertEqual(empty["memories"], [])
         self.assertFalse(empty["truncated"])
         with self.assertRaises(SessionNotFoundError):
-            recall_recent_memories(session_id="missing", config=self.config)
+            recall_memories(session_id="missing", config=self.config)
 
     def test_recent_recall_validates_top_k(self) -> None:
         with self.assertRaises(RecallBudgetError):
-            recall_recent_memories(top_k=0, config=self.config)
+            recall_memories(top_k=0, config=self.config)
 
     def test_recent_recall_respects_budget_and_keeps_oversized_newest_memory(self) -> None:
         save_memories(
@@ -272,7 +277,7 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
             ],
             config=self.config,
         )
-        payload = recall_recent_memories(
+        payload = recall_memories(
             top_k=2,
             config=dict(self.config, recall_max_tokens=1),
         )
@@ -292,7 +297,7 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
                 side_effect=AssertionError("reindexed"),
             ),
         ):
-            payload = recall_recent_memories(config=self.config)
+            payload = recall_memories(config=self.config)
         self.assertEqual(payload["memories"][0]["content"], "read without embeddings")
 
     def test_save_memories_skips_exact_duplicate(self) -> None:
@@ -301,7 +306,7 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["saved"], [])
         self.assertEqual(len(payload["skipped_duplicates"]), 1)
         self.assertIn("similarity", payload["skipped_duplicates"][0])
-        recalled = recall_recent_memories(config=self.config)
+        recalled = recall_memories(config=self.config)
         self.assertEqual(len(recalled["memories"]), 1)
 
     def test_save_memories_dedups_within_same_batch(self) -> None:
@@ -363,6 +368,81 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(payload["saved"], [])
         self.assertEqual(len(payload["skipped_duplicates"]), 1)
+
+    def test_update_memory_supersedes_old_and_hides_it_from_recall(self) -> None:
+        saved = save_memories(
+            [MemoryInput(content="uses MySQL")],
+            session_id="session-a",
+            config=self.config,
+        )
+        old_id = saved["saved"][0]["id"]
+        payload = update_memory(old_id, "uses Postgres now", config=self.config)
+        self.assertNotEqual(payload["id"], old_id)
+        self.assertEqual(payload["session_id"], "session-a")
+        self.assertEqual(payload["supersedes"]["id"], old_id)
+
+        recent = recall_memories(config=self.config)
+        self.assertEqual(
+            [memory["content"] for memory in recent["memories"]],
+            ["uses Postgres now"],
+        )
+
+    def test_update_memory_by_short_ref(self) -> None:
+        saved = save_memories([MemoryInput(content="uses MySQL")], config=self.config)
+        ref = saved["saved"][0]["ref"]
+        payload = update_memory(ref, "uses Postgres now", config=self.config)
+        self.assertEqual(payload["supersedes"]["ref"], ref)
+
+    def test_update_memory_missing_id_raises(self) -> None:
+        with self.assertRaises(MemoryNotFoundError):
+            update_memory("missing-id", "new content", config=self.config)
+
+    def test_update_memory_rejects_empty_content(self) -> None:
+        saved = save_memories([MemoryInput(content="uses MySQL")], config=self.config)
+        with self.assertRaises(EmptyMemoryError):
+            update_memory(saved["saved"][0]["id"], "   ", config=self.config)
+
+    def test_update_memory_twice_on_original_ref_raises(self) -> None:
+        saved = save_memories([MemoryInput(content="uses MySQL")], config=self.config)
+        old_id = saved["saved"][0]["id"]
+        update_memory(old_id, "uses Postgres now", config=self.config)
+        with self.assertRaises(MemoryAlreadySupersededError):
+            update_memory(old_id, "uses SQLite now", config=self.config)
+
+    def test_delete_memory_successor_restores_predecessor_visibility(self) -> None:
+        saved = save_memories([MemoryInput(content="uses MySQL")], config=self.config)
+        old_id = saved["saved"][0]["id"]
+        updated = update_memory(old_id, "uses Postgres now", config=self.config)
+        delete_memory(updated["id"], config=self.config)
+        recent = recall_memories(config=self.config)
+        self.assertEqual(
+            [memory["content"] for memory in recent["memories"]],
+            ["uses MySQL"],
+        )
+
+    def test_recall_memories_bumps_recall_count_only_on_returned_memories(self) -> None:
+        save_memories(
+            [
+                MemoryInput(content="User prefers Python for backend work"),
+                MemoryInput(content="User enjoys hiking on weekends"),
+            ],
+            config=self.config,
+        )
+        recall_memories("Python backend", top_k=1, config=self.config)
+        db_path = Path(self.config["memory_db_path"])
+        rows = {row.content: row for row in fetch_candidates(db_path)}
+        self.assertEqual(rows["User prefers Python for backend work"].recall_count, 1)
+        self.assertIsNotNone(
+            rows["User prefers Python for backend work"].last_recalled_at
+        )
+        self.assertEqual(rows["User enjoys hiking on weekends"].recall_count, 0)
+        self.assertIsNone(rows["User enjoys hiking on weekends"].last_recalled_at)
+
+    def test_recent_recall_does_not_bump_recall_count(self) -> None:
+        save_memories([MemoryInput(content="User likes tea")], config=self.config)
+        recall_memories(config=self.config)
+        db_path = Path(self.config["memory_db_path"])
+        self.assertEqual(fetch_candidates(db_path)[0].recall_count, 0)
 
     def test_relevance_reflects_absolute_similarity_not_just_rank(self) -> None:
         # RRF fuses ranks, not scores: the sole candidate in a pool always

@@ -94,6 +94,10 @@ class PublicConfigTests(unittest.TestCase):
             TinyContextConfig(dedup_similarity_threshold=1.1)
         with self.assertRaisesRegex(ValueError, "dedup_similarity_threshold"):
             TinyContextConfig(dedup_similarity_threshold=0.0)
+        with self.assertRaisesRegex(ValueError, "recall_access_weight"):
+            TinyContextConfig(recall_access_weight=1.1)
+        with self.assertRaisesRegex(ValueError, "recall_access_weight"):
+            TinyContextConfig(recall_access_weight=-0.1)
 
     def test_embedding_backend_normalizes_aliases(self) -> None:
         self.assertEqual(TinyContextConfig(embedding_backend="onnx").embedding_backend, "onnx")
@@ -140,6 +144,7 @@ class ServerConfigTests(unittest.TestCase):
                     "TINYCONTEXT_RECALL_DENSE_WEIGHT": "0.75",
                     "TINYCONTEXT_DENSE_QUERY_PREFIX": "query: ",
                     "TINYCONTEXT_DEDUP_SIMILARITY_THRESHOLD": "0.9",
+                    "TINYCONTEXT_RECALL_ACCESS_WEIGHT": "0.2",
                 },
                 clear=True,
             ):
@@ -159,6 +164,7 @@ class ServerConfigTests(unittest.TestCase):
         self.assertEqual(config["recall_dense_weight"], 0.75)
         self.assertEqual(config["dense_query_prefix"], "query: ")
         self.assertEqual(config["dedup_similarity_threshold"], 0.9)
+        self.assertEqual(config["recall_access_weight"], 0.2)
 
     def test_explicit_config_path_wins(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir, patch.dict(

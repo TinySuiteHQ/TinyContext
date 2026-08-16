@@ -11,6 +11,7 @@ from tinycontext.services.memory_store_service import (
     fetch_candidates,
     fetch_dense_scores,
     fetch_sparse_scores,
+    record_recall_hits,
     session_exists,
     short_memory_ref,
     update_memory_embeddings,
@@ -77,6 +78,7 @@ def memory_recall_run(
     embedding_batch_size: int = 32,
     rrf_similarity_cutoff: float | None = None,
     dense_weight: float = 0.5,
+    access_weight: float = 0.0,
     rrf_k: int = 60,
     query_prefix: str = "",
     document_prefix: str = "",
@@ -147,15 +149,18 @@ def memory_recall_run(
     dense_values = [float(dense_scores.get(row.id, 0.0)) for row in candidates]
     bm25_ranks = _rank_by_score(bm25_scores)
     dense_ranks = _rank_by_score(dense_values)
+    access_ranks = _rank_by_score([float(row.recall_count) for row in candidates])
     sparse_weight = 1.0 - dense_weight
-    max_rrf_score = (sparse_weight + dense_weight) / (rrf_k + 1)
+    max_rrf_score = (sparse_weight + dense_weight + access_weight) / (rrf_k + 1)
     fused: list[tuple[MemoryRow, dict[str, float | int | str]]] = []
     for index, row in enumerate(candidates):
         bm25_rank = bm25_ranks[index]
         dense_rank = dense_ranks[index]
+        access_rank = access_ranks[index]
         rrf_score = (
             sparse_weight / (rrf_k + bm25_rank)
             + dense_weight / (rrf_k + dense_rank)
+            + access_weight / (rrf_k + access_rank)
         )
         rrf_similarity = rrf_score / max_rrf_score if max_rrf_score else 0.0
         if (
@@ -207,6 +212,13 @@ def memory_recall_run(
             _memory_payload(row, rank, scores, content_tokens)
         )
         total_tokens += content_tokens
+
+    if selected:
+        record_recall_hits(
+            db_path,
+            [str(memory["id"]) for memory in selected],
+            _iso_utc(current_time),
+        )
 
     return {
         "query": query,

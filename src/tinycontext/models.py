@@ -17,3 +17,7 @@ class MemoryRow:
     embedding: list[float] | None = None
     embedding_model: str | None = None
     embedding_dimensions: int | None = None
+    superseded_by: str | None = None
+    superseded_at: str | None = None
+    last_recalled_at: str | None = None
+    recall_count: int = 0

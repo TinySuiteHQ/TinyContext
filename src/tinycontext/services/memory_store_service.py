@@ -51,6 +51,12 @@ _EMBEDDING_COLUMNS: dict[str, str] = {
     "embedding_model": "TEXT",
     "embedding_dimensions": "INTEGER",
 }
+_LIFECYCLE_COLUMNS: dict[str, str] = {
+    "superseded_by": "TEXT",
+    "superseded_at": "TEXT",
+    "last_recalled_at": "TEXT",
+    "recall_count": "INTEGER NOT NULL DEFAULT 0",
+}
 
 SHORT_REF_LENGTH = 12
 _SHORT_REF_RE = re.compile(rf"^[0-9a-f]{{{SHORT_REF_LENGTH}}}$")
@@ -121,6 +127,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         for row in conn.execute("PRAGMA table_info(memories)").fetchall()
     }
     for name, column_type in _EMBEDDING_COLUMNS.items():
+        if name not in columns:
+            conn.execute(f"ALTER TABLE memories ADD COLUMN {name} {column_type}")
+    for name, column_type in _LIFECYCLE_COLUMNS.items():
         if name not in columns:
             conn.execute(f"ALTER TABLE memories ADD COLUMN {name} {column_type}")
     conn.executescript(_EMBEDDING_INDEX_SQL)
@@ -290,7 +299,81 @@ def _row_to_memory(row: sqlite3.Row) -> MemoryRow:
         created_at=str(row["created_at"]),
         embedding_model=row["embedding_model"],
         embedding_dimensions=row["embedding_dimensions"],
+        superseded_by=row["superseded_by"],
+        superseded_at=row["superseded_at"],
+        last_recalled_at=row["last_recalled_at"],
+        recall_count=int(row["recall_count"]),
     )
+
+
+def fetch_memory_by_id(db_path: Path, memory_id: str) -> MemoryRow | None:
+    """Fetch a single memory row by its full id, or None if it doesn't exist."""
+
+    def _fetch(conn: sqlite3.Connection) -> MemoryRow | None:
+        row = conn.execute(
+            """
+            SELECT
+              id,
+              session_id,
+              content,
+              created_at,
+              embedding_model,
+              embedding_dimensions,
+              superseded_by,
+              superseded_at,
+              last_recalled_at,
+              recall_count
+            FROM memories
+            WHERE id = ?
+            """,
+            (memory_id,),
+        ).fetchone()
+        return _row_to_memory(row) if row is not None else None
+
+    return _pool.execute(db_path, _fetch)
+
+
+def supersede_memory(db_path: Path, old_id: str, new_id: str, superseded_at: str) -> None:
+    """Mark ``old_id`` as superseded by ``new_id``, hiding it from default recall."""
+
+    def _update(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            "UPDATE memories SET superseded_by = ?, superseded_at = ? WHERE id = ?",
+            (new_id, superseded_at, old_id),
+        )
+        conn.commit()
+
+    _pool.execute(db_path, _update)
+
+
+def clear_superseded_by(db_path: Path, memory_id: str) -> None:
+    """Un-hide whichever row was superseded by ``memory_id`` (e.g. after it's deleted)."""
+
+    def _update(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            "UPDATE memories SET superseded_by = NULL, superseded_at = NULL "
+            "WHERE superseded_by = ?",
+            (memory_id,),
+        )
+        conn.commit()
+
+    _pool.execute(db_path, _update)
+
+
+def record_recall_hits(db_path: Path, memory_ids: Sequence[str], recalled_at: str) -> None:
+    """Bump recall_count and last_recalled_at for memories returned by a recall."""
+    if not memory_ids:
+        return
+
+    def _update(conn: sqlite3.Connection) -> None:
+        conn.executemany(
+            "UPDATE memories SET recall_count = recall_count + 1, last_recalled_at = ? "
+            "WHERE id = ?",
+            [(recalled_at, memory_id) for memory_id in memory_ids],
+        )
+        conn.commit()
+
+    _pool.execute(db_path, _update)
 
 
 def fetch_candidates(
@@ -307,12 +390,17 @@ def fetch_candidates(
           content,
           created_at,
           embedding_model,
-          embedding_dimensions
+          embedding_dimensions,
+          superseded_by,
+          superseded_at,
+          last_recalled_at,
+          recall_count
         FROM memories
+        WHERE superseded_by IS NULL
         """
         params: list[Any] = []
         if session_id is not None:
-            query += " WHERE session_id = ?"
+            query += " AND session_id = ?"
             params.append(session_id)
         query += " ORDER BY created_at DESC"
         if limit is not None:
@@ -340,12 +428,17 @@ def fetch_recent_memories(
           content,
           created_at,
           embedding_model,
-          embedding_dimensions
+          embedding_dimensions,
+          superseded_by,
+          superseded_at,
+          last_recalled_at,
+          recall_count
         FROM memories
+        WHERE superseded_by IS NULL
         """
         params: list[Any] = []
         if session_id is not None:
-            query += " WHERE session_id = ?"
+            query += " AND session_id = ?"
             params.append(session_id)
         # rowid makes equal-second and same-batch saves deterministic: the
         # later inserted row is the newer one when timestamps tie.

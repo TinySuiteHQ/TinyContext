@@ -11,6 +11,7 @@ from tinycontext.config import ConfigInput, resolve_config
 from tinycontext.errors import (
     AmbiguousMemoryReferenceError,
     EmptyMemoryError,
+    MemoryAlreadySupersededError,
     MemoryNotFoundError,
     RecallBudgetError,
     SessionNotFoundError,
@@ -23,15 +24,18 @@ from tinycontext.services.embedding_reindex_service import (
 )
 from tinycontext.services.embedding_service import embed_texts, embedding_model_key
 from tinycontext.services.memory_store_service import (
+    clear_superseded_by,
     delete_memory as _delete_memory_row,
     embedding_model_mismatch_count,
     embedding_storage_stats,
     fetch_dense_scores,
+    fetch_memory_by_id,
     fetch_recent_memories,
     find_memory_ids_by_ref,
     insert_memories,
     looks_like_short_ref,
     short_memory_ref,
+    supersede_memory,
 )
 from tinycontext.services.token_counter_service import token_count
 
@@ -148,17 +152,25 @@ def save_memories(
     return result
 
 
+_RECENT_MODE_DEFAULT_TOP_K = 5
+
+
 def recall_memories(
-    query: str,
+    query: str | None = None,
     *,
     session_id: str | None = None,
     max_tokens: int | None = None,
     top_k: int | None = None,
     config: ConfigInput | None = None,
 ) -> dict[str, Any]:
-    query = query.strip()
-    if not query:
-        raise EmptyMemoryError("query must not be empty")
+    """Recall memories relevant to ``query``, or the newest ones if omitted.
+
+    Passing a non-empty ``query`` runs hybrid semantic search. Omitting it
+    (or passing an empty/whitespace-only string) returns the newest stored
+    memories in chronological order instead -- a bounded, non-semantic view
+    useful for resuming a recent thread.
+    """
+    query = (query or "").strip()
     if max_tokens is not None and max_tokens < 1:
         raise RecallBudgetError("max_tokens must be at least 1")
     if top_k is not None and top_k < 1:
@@ -166,6 +178,16 @@ def recall_memories(
 
     resolved = _resolved_values(config)
     db_path = Path(str(resolved["memory_db_path"]))
+
+    if not query:
+        return _recall_recent_memories(
+            session_id=session_id,
+            max_tokens=max_tokens,
+            top_k=top_k or _RECENT_MODE_DEFAULT_TOP_K,
+            resolved=resolved,
+            db_path=db_path,
+        )
+
     notice = _kick_off_background_reindex(resolved, db_path)
     result = memory_recall_run(
         query=query,
@@ -181,6 +203,7 @@ def recall_memories(
         embedding_batch_size=int(resolved["embedding_batch_size"]),
         rrf_similarity_cutoff=float(resolved["recall_rrf_cutoff"]),
         dense_weight=float(resolved["recall_dense_weight"]),
+        access_weight=float(resolved["recall_access_weight"]),
         rrf_k=int(resolved["recall_rrf_k"]),
         query_prefix=str(resolved["dense_query_prefix"]),
         document_prefix=str(resolved["dense_document_prefix"]),
@@ -191,18 +214,15 @@ def recall_memories(
     return result
 
 
-def recall_recent_memories(
+def _recall_recent_memories(
     *,
-    session_id: str | None = None,
-    top_k: int = 5,
-    config: ConfigInput | None = None,
+    session_id: str | None,
+    max_tokens: int | None,
+    top_k: int,
+    resolved: dict[str, Any],
+    db_path: Path,
 ) -> dict[str, Any]:
     """Return the newest durable memories within the configured token budget."""
-    if top_k < 1:
-        raise RecallBudgetError("top_k must be at least 1")
-
-    resolved = _resolved_values(config)
-    db_path = Path(str(resolved["memory_db_path"]))
     rows = fetch_recent_memories(db_path, session_id=session_id, limit=top_k)
     if session_id is not None and not rows:
         raise SessionNotFoundError(f"session not found: {session_id}")
@@ -211,14 +231,14 @@ def recall_recent_memories(
     selected: list[dict[str, Any]] = []
     total_tokens = 0
     truncated = False
-    max_tokens = int(resolved["recall_max_tokens"])
+    resolved_max_tokens = max_tokens or int(resolved["recall_max_tokens"])
     encoding_name = str(resolved["encoding_name"])
     for rank, row in enumerate(rows, start=1):
         content_tokens = token_count(row.content, encoding_name)
-        if selected and total_tokens + content_tokens > max_tokens:
+        if selected and total_tokens + content_tokens > resolved_max_tokens:
             truncated = True
             break
-        if not selected and content_tokens > max_tokens:
+        if not selected and content_tokens > resolved_max_tokens:
             truncated = True
             selected.append(_recent_memory_payload(row, rank, content_tokens))
             total_tokens = content_tokens
@@ -250,6 +270,87 @@ def _recent_memory_payload(
     }
 
 
+def _resolve_memory_id(db_path: Path, memory_id: str) -> str:
+    if not looks_like_short_ref(memory_id):
+        return memory_id
+    matches = find_memory_ids_by_ref(db_path, memory_id.lower())
+    if not matches:
+        raise MemoryNotFoundError(f"no memory found with ref {memory_id!r}")
+    if len(matches) > 1:
+        raise AmbiguousMemoryReferenceError(
+            f"ref {memory_id!r} matches {len(matches)} memories; "
+            "use the full id instead"
+        )
+    return matches[0]
+
+
+def update_memory(
+    memory_id: str,
+    content: str,
+    *,
+    config: ConfigInput | None = None,
+) -> dict[str, Any]:
+    """Supersede a stored memory with corrected content, preserving history."""
+    memory_id = memory_id.strip()
+    if not memory_id:
+        raise EmptyMemoryError("memory_id must not be empty")
+    content = content.strip()
+    if not content:
+        raise EmptyMemoryError("memory content must not be empty")
+
+    resolved = _resolved_values(config)
+    db_path = Path(str(resolved["memory_db_path"]))
+    encoding_name = str(resolved["encoding_name"])
+
+    resolved_id = _resolve_memory_id(db_path, memory_id)
+    old_row = fetch_memory_by_id(db_path, resolved_id)
+    if old_row is None:
+        raise MemoryNotFoundError(f"no memory found with id {memory_id!r}")
+    if old_row.superseded_by is not None:
+        raise MemoryAlreadySupersededError(
+            f"memory {memory_id!r} was already superseded by "
+            f"{short_memory_ref(old_row.superseded_by)!r}; update that memory instead"
+        )
+
+    vector = embed_texts(
+        [str(resolved["dense_document_prefix"]) + content],
+        embedding_model=str(resolved["embedding_model"]),
+        backend=str(resolved["embedding_backend"]),
+        models_dir=Path(str(resolved["models_dir"])),
+        openai_env_file=str(resolved["embedding_openai_env_file"]),
+        batch_size=int(resolved["embedding_batch_size"]),
+    )[0]
+    model_key = embedding_model_key(
+        str(resolved["embedding_model"]),
+        backend=str(resolved["embedding_backend"]),
+        models_dir=Path(str(resolved["models_dir"])),
+        openai_env_file=str(resolved["embedding_openai_env_file"]),
+        document_prefix=str(resolved["dense_document_prefix"]),
+    )
+    new_id = str(uuid.uuid4())
+    created_at = _utc_now_iso()
+    new_row = MemoryRow(
+        id=new_id,
+        session_id=old_row.session_id,
+        content=content,
+        created_at=created_at,
+        embedding=vector,
+        embedding_model=model_key,
+        embedding_dimensions=len(vector),
+    )
+    insert_memories(db_path, [new_row])
+    supersede_memory(db_path, resolved_id, new_id, superseded_at=created_at)
+
+    return {
+        "id": new_id,
+        "ref": short_memory_ref(new_id),
+        "session_id": old_row.session_id,
+        "content_tokens": token_count(content, encoding_name),
+        "created_at": created_at,
+        "supersedes": {"id": resolved_id, "ref": short_memory_ref(resolved_id)},
+    }
+
+
 def delete_memory(
     memory_id: str,
     *,
@@ -262,21 +363,12 @@ def delete_memory(
     resolved = _resolved_values(config)
     db_path = Path(str(resolved["memory_db_path"]))
 
-    resolved_id = memory_id
-    if looks_like_short_ref(memory_id):
-        matches = find_memory_ids_by_ref(db_path, memory_id.lower())
-        if not matches:
-            raise MemoryNotFoundError(f"no memory found with ref {memory_id!r}")
-        if len(matches) > 1:
-            raise AmbiguousMemoryReferenceError(
-                f"ref {memory_id!r} matches {len(matches)} memories; "
-                "use the full id instead"
-            )
-        resolved_id = matches[0]
+    resolved_id = _resolve_memory_id(db_path, memory_id)
 
     deleted = _delete_memory_row(db_path, resolved_id)
     if not deleted:
         raise MemoryNotFoundError(f"no memory found with id {memory_id!r}")
+    clear_superseded_by(db_path, resolved_id)
     return {"id": resolved_id, "ref": short_memory_ref(resolved_id), "deleted": True}
 
 

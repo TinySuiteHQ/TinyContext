@@ -12,12 +12,12 @@ from tinycontext.servers.fastapi_server import (
     DeleteMemoryRequest,
     MemoryInputModel,
     RecallMemoriesRequest,
-    RecallRecentMemoriesRequest,
     SaveMemoriesRequest,
+    UpdateMemoryRequest,
     delete_memory_endpoint,
     recall_memories_endpoint,
-    recall_recent_memories_endpoint,
     save_memories_endpoint,
+    update_memory_endpoint,
     app,
 )
 from tinycontext.services.memory_store_service import close_connection
@@ -67,7 +67,7 @@ class FastApiMemoryEndpointTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertGreaterEqual(len(payload["memories"]), 1)
 
-    async def test_recall_recent_memories_endpoint_defaults_and_overrides(self) -> None:
+    async def test_recall_memories_endpoint_recent_mode_defaults_and_overrides(self) -> None:
         with patch(
             "tinycontext.servers.fastapi_server.load_context_config",
             return_value=self.config,
@@ -80,17 +80,15 @@ class FastApiMemoryEndpointTests(unittest.IsolatedAsyncioTestCase):
                     ],
                 )
             )
-            default_payload = await recall_recent_memories_endpoint(
-                RecallRecentMemoriesRequest()
-            )
-            override_payload = await recall_recent_memories_endpoint(
-                RecallRecentMemoriesRequest(top_k=2)
+            default_payload = await recall_memories_endpoint(RecallMemoriesRequest())
+            override_payload = await recall_memories_endpoint(
+                RecallMemoriesRequest(top_k=2)
             )
         self.assertEqual(len(default_payload["memories"]), 5)
         self.assertEqual(len(override_payload["memories"]), 2)
         self.assertEqual(override_payload["mode"], "recent")
 
-    async def test_recall_recent_memories_http_get_post_and_validation(self) -> None:
+    async def test_recall_memories_recent_mode_http_get_post_and_validation(self) -> None:
         transport = httpx.ASGITransport(app=app)
         with patch(
             "tinycontext.servers.fastapi_server.load_context_config",
@@ -107,15 +105,15 @@ class FastApiMemoryEndpointTests(unittest.IsolatedAsyncioTestCase):
                     },
                 )
                 self.assertEqual(saved.status_code, 200)
-                get_response = await client.get("/recall_recent_memories")
+                get_response = await client.get("/recall_memories")
                 post_response = await client.post(
-                    "/recall_recent_memories", json={"top_k": 2}
+                    "/recall_memories", json={"top_k": 2}
                 )
                 invalid_get = await client.get(
-                    "/recall_recent_memories", params={"top_k": 0}
+                    "/recall_memories", params={"top_k": 0}
                 )
                 invalid_post = await client.post(
-                    "/recall_recent_memories", json={"top_k": 0}
+                    "/recall_memories", json={"top_k": 0}
                 )
         self.assertEqual(get_response.status_code, 200)
         self.assertEqual(len(get_response.json()["memories"]), 5)
@@ -123,6 +121,23 @@ class FastApiMemoryEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(post_response.json()["memories"]), 2)
         self.assertEqual(invalid_get.status_code, 422)
         self.assertEqual(invalid_post.status_code, 422)
+
+    async def test_update_memory_endpoint(self) -> None:
+        with patch(
+            "tinycontext.servers.fastapi_server.load_context_config",
+            return_value=self.config,
+        ):
+            saved = await save_memories_endpoint(
+                SaveMemoriesRequest(
+                    memories=[MemoryInputModel(content="uses MySQL")],
+                )
+            )
+            memory_id = saved["saved"][0]["id"]
+            payload = await update_memory_endpoint(
+                UpdateMemoryRequest(memory_id=memory_id, content="uses Postgres now")
+            )
+        self.assertNotEqual(payload["id"], memory_id)
+        self.assertEqual(payload["supersedes"]["id"], memory_id)
 
     async def test_delete_memory_endpoint(self) -> None:
         with patch(

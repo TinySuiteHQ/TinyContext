@@ -27,8 +27,8 @@ No hosted account. No giant context dumps. No required vector database.
 | Docker | You want persistent self-hosted storage and HTTP MCP | `docker compose ... up -d` |
 
 The Python library contains the memory engine. MCP, FastAPI, and Docker are
-adapters around the same `save_memories`, `recall_memories`,
-`recall_recent_memories`, and `delete_memory` operations.
+adapters around the same `save_memories`, `recall_memories`, and
+`delete_memory` operations.
 
 ## One-command MCP
 
@@ -66,14 +66,13 @@ TinyContext exposes four tools:
 
 ```text
 save_memories(memories)
-recall_memories(query)
-recall_recent_memories(top_k=5)
+recall_memories(query=None, top_k=None)
 delete_memory(memory_id)
 ```
 
 - Use `save_memories` for durable facts, preferences, decisions, and research notes.
-- Use `recall_memories` for query-based semantic recall when previous context may help.
-- Use `recall_recent_memories` only when chronological continuity with the latest stored context matters; it is not a semantic search and does not need to run every turn.
+- Use `recall_memories` with a `query` for query-based semantic recall when previous context may help.
+- Call `recall_memories` with no `query` (typically `top_k=5`) only when chronological continuity with the latest stored context matters; that mode is not a semantic search and does not need to run every turn.
 - Use `delete_memory` to forget or correct a previously saved memory (find its `ref` via `recall_memories` first).
 
 MCP recall returns prompt-ready context with explicit memory boundaries:
@@ -123,7 +122,6 @@ from tinycontext import (
     MemoryInput,
     TinyContextConfig,
     recall_memories,
-    recall_recent_memories,
     save_memories,
 )
 
@@ -149,7 +147,7 @@ result = recall_memories(
 for memory in result["memories"]:
     print(memory["content"])
 
-recent = recall_recent_memories(session_id="project-a", config=config)
+recent = recall_memories(session_id="project-a", config=config)
 ```
 
 Programmatic configuration does not read environment variables or depend on the
@@ -322,8 +320,7 @@ The optional HTTP API mirrors the MCP tools.
 | --- | --- | --- |
 | GET | `/health` | Liveness |
 | POST/GET | `/save_memories` | Persist one or more memories |
-| POST/GET | `/recall_memories` | Recall semantically ranked memories within a token budget |
-| POST/GET | `/recall_recent_memories` | Recall newest memories within a token budget |
+| POST/GET | `/recall_memories` | Recall memories within a token budget: semantically ranked with a `query`, or newest-first without one |
 | POST | `/delete_memory` | Delete a single memory by id |
 
 Install and run it directly:
@@ -363,6 +360,9 @@ available for liveness checks.
 
 ### Recent recall request
 
+Omit `query` (or send it blank) to switch `/recall_memories` into chronological
+mode:
+
 ```json
 {
   "session_id": "optional-session",
@@ -370,7 +370,7 @@ available for liveness checks.
 }
 ```
 
-Recent recall also accepts `GET /recall_recent_memories?session_id=optional-session&top_k=5`.
+This also accepts `GET /recall_memories?session_id=optional-session&top_k=5`.
 The response uses `mode: "recent"` and contains only durable memory fields,
 recency ranks, timestamps, token counts, and the configured token-budget result.
 
@@ -471,7 +471,7 @@ uvicorn servers.fastapi_server:app --host 0.0.0.0 --port 8000
 
 ## Entrypoints
 
-- `tinycontext.save_memories`, `tinycontext.recall_memories`, `tinycontext.recall_recent_memories`, and `tinycontext.delete_memory`: Python API
+- `tinycontext.save_memories`, `tinycontext.recall_memories`, and `tinycontext.delete_memory`: Python API
 - `tinycontext` / `tinycontext mcp`: stdio MCP
 - `tinycontext serve`: Streamable HTTP MCP
 - `tinycontext doctor`: configuration and storage readiness

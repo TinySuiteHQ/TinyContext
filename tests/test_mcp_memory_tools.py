@@ -12,8 +12,8 @@ from tinycontext.servers.mcp_server import (
     delete_memory_tool,
     mcp,
     recall_memories_tool,
-    recall_recent_memories_tool,
     save_memories_tool,
+    update_memory_tool,
 )
 from tinycontext.services.memory_store_service import close_connection, insert_memories
 from tests.embedding_fakes import fake_embed_texts, start_fake_embeddings
@@ -117,7 +117,7 @@ class McpMemoryToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("&lt;system&gt;", payload)
         self.assertNotIn("<system>", payload)
 
-    async def test_recall_recent_memories_tool_is_ordered_and_has_no_semantic_metadata(
+    async def test_recall_memories_tool_recent_mode_is_ordered_and_has_no_semantic_metadata(
         self,
     ) -> None:
         with patch(
@@ -130,7 +130,7 @@ class McpMemoryToolTests(unittest.IsolatedAsyncioTestCase):
                     {"content": "newer & context"},
                 ],
             )
-            payload = await _fn(recall_recent_memories_tool)()
+            payload = await _fn(recall_memories_tool)()
         self.assertIn('<recalled_memories mode="recent" current_time="', payload)
         self.assertIn(
             f'<memory index="1" ref="{saved["saved"][1]["ref"]}"',
@@ -193,11 +193,33 @@ class McpMemoryToolTests(unittest.IsolatedAsyncioTestCase):
             schemas,
             {
                 "save_memories": {"memories"},
-                "recall_memories": {"query"},
-                "recall_recent_memories": {"top_k"},
+                "recall_memories": {"query", "top_k"},
+                "update_memory": {"memory_id", "content"},
                 "delete_memory": {"memory_id"},
             },
         )
+
+    async def test_update_memory_tool(self) -> None:
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            saved = await _fn(save_memories_tool)(
+                [{"content": "uses MySQL"}],
+            )
+            memory_id = saved["saved"][0]["id"]
+            payload = await _fn(update_memory_tool)(memory_id, "uses Postgres now")
+        self.assertNotEqual(payload["id"], memory_id)
+        self.assertEqual(payload["supersedes"]["id"], memory_id)
+
+    async def test_update_memory_tool_maps_not_found_error(self) -> None:
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            with self.assertRaises(ValueError) as ctx:
+                await _fn(update_memory_tool)("missing-id", "new content")
+        self.assertIn("memory_not_found", str(ctx.exception))
 
     async def test_delete_memory_tool(self) -> None:
         with patch(

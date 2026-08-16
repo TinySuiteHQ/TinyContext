@@ -8,15 +8,19 @@ from pathlib import Path
 from tinycontext.models import MemoryRow
 from tinycontext.services import memory_store_service
 from tinycontext.services.memory_store_service import (
+    clear_superseded_by,
     close_connection,
     delete_memory,
     embedding_storage_stats,
     fetch_candidates,
+    fetch_memory_by_id,
     fetch_recent_memories,
     fetch_dense_scores,
     init_db,
     insert_memories,
+    record_recall_hits,
     session_exists,
+    supersede_memory,
 )
 
 
@@ -127,6 +131,99 @@ class MemoryStoreServiceTests(unittest.TestCase):
         self.assertTrue(delete_memory(self.db_path, "m1"))
         self.assertEqual(fetch_candidates(self.db_path), [])
         self.assertFalse(delete_memory(self.db_path, "m1"))
+
+    def test_fetch_memory_by_id_returns_row_or_none(self) -> None:
+        self.assertIsNone(fetch_memory_by_id(self.db_path, "missing"))
+        insert_memories(
+            self.db_path,
+            [
+                MemoryRow(
+                    id="m1",
+                    session_id="s1",
+                    content="one",
+                    created_at="2026-06-30T10:00:00Z",
+                )
+            ],
+        )
+        row = fetch_memory_by_id(self.db_path, "m1")
+        assert row is not None
+        self.assertEqual(row.content, "one")
+        self.assertEqual(row.recall_count, 0)
+        self.assertIsNone(row.superseded_by)
+
+    def test_supersede_memory_hides_row_from_fetches(self) -> None:
+        insert_memories(
+            self.db_path,
+            [
+                MemoryRow(
+                    id="old",
+                    session_id=None,
+                    content="uses MySQL",
+                    created_at="2026-06-30T10:00:00Z",
+                ),
+                MemoryRow(
+                    id="new",
+                    session_id=None,
+                    content="uses Postgres",
+                    created_at="2026-06-30T10:01:00Z",
+                ),
+            ],
+        )
+        supersede_memory(self.db_path, "old", "new", "2026-06-30T10:01:00Z")
+        self.assertEqual([row.id for row in fetch_candidates(self.db_path)], ["new"])
+        self.assertEqual(
+            [row.id for row in fetch_recent_memories(self.db_path)], ["new"]
+        )
+        old_row = fetch_memory_by_id(self.db_path, "old")
+        assert old_row is not None
+        self.assertEqual(old_row.superseded_by, "new")
+        self.assertEqual(old_row.superseded_at, "2026-06-30T10:01:00Z")
+
+    def test_clear_superseded_by_restores_visibility(self) -> None:
+        insert_memories(
+            self.db_path,
+            [
+                MemoryRow(
+                    id="old",
+                    session_id=None,
+                    content="uses MySQL",
+                    created_at="2026-06-30T10:00:00Z",
+                ),
+                MemoryRow(
+                    id="new",
+                    session_id=None,
+                    content="uses Postgres",
+                    created_at="2026-06-30T10:01:00Z",
+                ),
+            ],
+        )
+        supersede_memory(self.db_path, "old", "new", "2026-06-30T10:01:00Z")
+        clear_superseded_by(self.db_path, "new")
+        old_row = fetch_memory_by_id(self.db_path, "old")
+        assert old_row is not None
+        self.assertIsNone(old_row.superseded_by)
+        self.assertEqual(
+            {row.id for row in fetch_candidates(self.db_path)}, {"old", "new"}
+        )
+
+    def test_record_recall_hits_increments_count_and_timestamp(self) -> None:
+        insert_memories(
+            self.db_path,
+            [
+                MemoryRow(
+                    id="m1",
+                    session_id=None,
+                    content="one",
+                    created_at="2026-06-30T10:00:00Z",
+                )
+            ],
+        )
+        record_recall_hits(self.db_path, ["m1"], "2026-06-30T11:00:00Z")
+        record_recall_hits(self.db_path, ["m1"], "2026-06-30T12:00:00Z")
+        row = fetch_memory_by_id(self.db_path, "m1")
+        assert row is not None
+        self.assertEqual(row.recall_count, 2)
+        self.assertEqual(row.last_recalled_at, "2026-06-30T12:00:00Z")
 
     def test_vectors_are_stored_as_blobs_and_ranked_inside_sqlite(self) -> None:
         insert_memories(

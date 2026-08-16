@@ -29,6 +29,7 @@ def default_config() -> dict[str, Any]:
         "dense_query_prefix": "",
         "dense_document_prefix": "",
         "dedup_similarity_threshold": 0.95,
+        "recall_access_weight": 0.0,
     }
 
 
@@ -115,6 +116,14 @@ def normalize_config(
     if dedup_threshold <= 0.0 or dedup_threshold > 1.0:
         raise ValueError("dedup_similarity_threshold must be greater than 0 and at most 1")
     config["dedup_similarity_threshold"] = dedup_threshold
+
+    try:
+        access_weight = float(config["recall_access_weight"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("recall_access_weight must be a number") from exc
+    if access_weight < 0.0 or access_weight > 1.0:
+        raise ValueError("recall_access_weight must be between 0 and 1")
+    config["recall_access_weight"] = access_weight
 
     for key in ("encoding_name", "embedding_model", "embedding_openai_env_file"):
         value = str(config[key] or "").strip()
