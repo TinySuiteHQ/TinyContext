@@ -44,21 +44,24 @@ class MemoryFastApiMcpParityTests(unittest.IsolatedAsyncioTestCase):
         self._tmpdir.cleanup()
 
     async def test_save_memories_parity(self) -> None:
-        memories = [{"content": "parity save memory"}]
+        # Distinct content per adapter so save-time dedup doesn't skip the
+        # second call -- this test checks response-shape parity, not dedup.
         with patch(
             "tinycontext.servers.fastapi_server.load_context_config",
             return_value=self.config,
         ):
             fastapi_payload = await save_memories_endpoint(
                 SaveMemoriesRequest(
-                    memories=[MemoryInputModel(**memories[0])],
+                    memories=[MemoryInputModel(content="parity save memory fastapi")],
                 )
             )
         with patch(
             "tinycontext.servers.mcp_server.load_context_config",
             return_value=self.config,
         ):
-            mcp_payload = await _fn(save_memories_tool)(memories)
+            mcp_payload = await _fn(save_memories_tool)(
+                [{"content": "parity save memory mcp"}]
+            )
         self.assertEqual(
             {item["session_id"] for item in fastapi_payload["saved"]},
             {item["session_id"] for item in mcp_payload["saved"]},

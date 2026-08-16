@@ -26,6 +26,7 @@ from tinycontext.services.memory_store_service import (
     delete_memory as _delete_memory_row,
     embedding_model_mismatch_count,
     embedding_storage_stats,
+    fetch_dense_scores,
     fetch_recent_memories,
     find_memory_ids_by_ref,
     insert_memories,
@@ -98,22 +99,38 @@ def save_memories(
         openai_env_file=str(resolved["embedding_openai_env_file"]),
         document_prefix=str(resolved["dense_document_prefix"]),
     )
-    rows: list[MemoryRow] = []
+    dedup_threshold = float(resolved["dedup_similarity_threshold"])
     saved: list[dict[str, Any]] = []
+    skipped_duplicates: list[dict[str, Any]] = []
     for (item, content), vector in zip(normalized_items, vectors, strict=True):
+        scores = fetch_dense_scores(
+            db_path,
+            vector,
+            embedding_model=model_key,
+            session_id=session_id,
+        )
+        if scores:
+            duplicate_id, similarity = max(scores.items(), key=lambda kv: kv[1])
+            if similarity >= dedup_threshold:
+                skipped_duplicates.append(
+                    {
+                        "duplicate_of": short_memory_ref(duplicate_id),
+                        "similarity": round(similarity, 4),
+                    }
+                )
+                continue
         memory_id = str(uuid.uuid4())
         created_at = _utc_now_iso()
-        rows.append(
-            MemoryRow(
-                id=memory_id,
-                session_id=session_id,
-                content=content,
-                created_at=created_at,
-                embedding=vector,
-                embedding_model=model_key,
-                embedding_dimensions=len(vector),
-            )
+        row = MemoryRow(
+            id=memory_id,
+            session_id=session_id,
+            content=content,
+            created_at=created_at,
+            embedding=vector,
+            embedding_model=model_key,
+            embedding_dimensions=len(vector),
         )
+        insert_memories(db_path, [row])
         saved.append(
             {
                 "id": memory_id,
@@ -123,8 +140,9 @@ def save_memories(
                 "created_at": created_at,
             }
         )
-    insert_memories(db_path, rows)
     result: dict[str, Any] = {"saved": saved}
+    if skipped_duplicates:
+        result["skipped_duplicates"] = skipped_duplicates
     if notice:
         result["notice"] = notice
     return result

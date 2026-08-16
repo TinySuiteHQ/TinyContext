@@ -90,6 +90,10 @@ class PublicConfigTests(unittest.TestCase):
             TinyContextConfig(embedding_backend="not-a-real-backend")
         with self.assertRaisesRegex(ValueError, "embedding_openai_env_file"):
             TinyContextConfig(embedding_openai_env_file=" ")
+        with self.assertRaisesRegex(ValueError, "dedup_similarity_threshold"):
+            TinyContextConfig(dedup_similarity_threshold=1.1)
+        with self.assertRaisesRegex(ValueError, "dedup_similarity_threshold"):
+            TinyContextConfig(dedup_similarity_threshold=0.0)
 
     def test_embedding_backend_normalizes_aliases(self) -> None:
         self.assertEqual(TinyContextConfig(embedding_backend="onnx").embedding_backend, "onnx")
@@ -135,6 +139,7 @@ class ServerConfigTests(unittest.TestCase):
                     "TINYCONTEXT_RECALL_RRF_CUTOFF": "0.8",
                     "TINYCONTEXT_RECALL_DENSE_WEIGHT": "0.75",
                     "TINYCONTEXT_DENSE_QUERY_PREFIX": "query: ",
+                    "TINYCONTEXT_DEDUP_SIMILARITY_THRESHOLD": "0.9",
                 },
                 clear=True,
             ):
@@ -153,6 +158,7 @@ class ServerConfigTests(unittest.TestCase):
         self.assertEqual(config["recall_rrf_cutoff"], 0.8)
         self.assertEqual(config["recall_dense_weight"], 0.75)
         self.assertEqual(config["dense_query_prefix"], "query: ")
+        self.assertEqual(config["dedup_similarity_threshold"], 0.9)
 
     def test_explicit_config_path_wins(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir, patch.dict(

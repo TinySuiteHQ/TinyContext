@@ -28,6 +28,7 @@ def default_config() -> dict[str, Any]:
         "recall_rrf_k": 60,
         "dense_query_prefix": "",
         "dense_document_prefix": "",
+        "dedup_similarity_threshold": 0.95,
     }
 
 
@@ -106,6 +107,14 @@ def normalize_config(
     if rrf_k < 0:
         raise ValueError("recall_rrf_k must be at least 0")
     config["recall_rrf_k"] = rrf_k
+
+    try:
+        dedup_threshold = float(config["dedup_similarity_threshold"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("dedup_similarity_threshold must be a number") from exc
+    if dedup_threshold <= 0.0 or dedup_threshold > 1.0:
+        raise ValueError("dedup_similarity_threshold must be greater than 0 and at most 1")
+    config["dedup_similarity_threshold"] = dedup_threshold
 
     for key in ("encoding_name", "embedding_model", "embedding_openai_env_file"):
         value = str(config[key] or "").strip()

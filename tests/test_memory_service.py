@@ -208,9 +208,21 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Dog", payload["memories"][0]["content"])
 
     def test_recent_recall_defaults_to_five_and_is_newest_first(self) -> None:
-        save_memories(
-            [MemoryInput(content=f"memory {index}") for index in range(6)],
-            config=self.config,
+        # Seeded directly (not via save_memories) so this recall-ordering
+        # test doesn't depend on save-time dedup treating any of these
+        # near-identical placeholder strings as duplicates of each other.
+        db_path = Path(self.config["memory_db_path"])
+        insert_memories(
+            db_path,
+            [
+                MemoryRow(
+                    id=f"recent-{index:02d}",
+                    session_id=None,
+                    content=f"memory {index}",
+                    created_at=f"2026-01-01T00:00:{index:02d}Z",
+                )
+                for index in range(6)
+            ],
         )
         payload = recall_recent_memories(config=self.config)
         self.assertEqual(payload["mode"], "recent")
@@ -282,6 +294,75 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
         ):
             payload = recall_recent_memories(config=self.config)
         self.assertEqual(payload["memories"][0]["content"], "read without embeddings")
+
+    def test_save_memories_skips_exact_duplicate(self) -> None:
+        save_memories([MemoryInput(content="User likes tea")], config=self.config)
+        payload = save_memories([MemoryInput(content="User likes tea")], config=self.config)
+        self.assertEqual(payload["saved"], [])
+        self.assertEqual(len(payload["skipped_duplicates"]), 1)
+        self.assertIn("similarity", payload["skipped_duplicates"][0])
+        recalled = recall_recent_memories(config=self.config)
+        self.assertEqual(len(recalled["memories"]), 1)
+
+    def test_save_memories_dedups_within_same_batch(self) -> None:
+        payload = save_memories(
+            [
+                MemoryInput(content="User likes tea"),
+                MemoryInput(content="User likes tea"),
+            ],
+            config=self.config,
+        )
+        self.assertEqual(len(payload["saved"]), 1)
+        self.assertEqual(len(payload["skipped_duplicates"]), 1)
+
+    def test_save_memories_dedup_is_scoped_to_session(self) -> None:
+        save_memories(
+            [MemoryInput(content="User likes tea")],
+            session_id="session-a",
+            config=self.config,
+        )
+        payload = save_memories(
+            [MemoryInput(content="User likes tea")],
+            session_id="session-b",
+            config=self.config,
+        )
+        self.assertEqual(len(payload["saved"]), 1)
+        self.assertNotIn("skipped_duplicates", payload)
+
+    def test_save_memories_does_not_skip_distinct_content(self) -> None:
+        payload = save_memories(
+            [
+                MemoryInput(content="User prefers Python for backend work"),
+                MemoryInput(content="User enjoys hiking on weekends"),
+            ],
+            config=self.config,
+        )
+        self.assertEqual(len(payload["saved"]), 2)
+        self.assertNotIn("skipped_duplicates", payload)
+
+    def test_save_memories_partial_similarity_not_skipped_by_default(self) -> None:
+        # "sqlite storage" only partially overlaps "sqlite storage python
+        # backend" under the fake embedder (shared group + an empty group),
+        # giving cosine similarity ~0.707 -- below the default 0.95 floor.
+        save_memories(
+            [MemoryInput(content="sqlite storage python backend")],
+            config=self.config,
+        )
+        payload = save_memories([MemoryInput(content="sqlite storage")], config=self.config)
+        self.assertEqual(len(payload["saved"]), 1)
+        self.assertNotIn("skipped_duplicates", payload)
+
+    def test_save_memories_lower_threshold_skips_related_content(self) -> None:
+        save_memories(
+            [MemoryInput(content="sqlite storage python backend")],
+            config=self.config,
+        )
+        payload = save_memories(
+            [MemoryInput(content="sqlite storage")],
+            config=dict(self.config, dedup_similarity_threshold=0.5),
+        )
+        self.assertEqual(payload["saved"], [])
+        self.assertEqual(len(payload["skipped_duplicates"]), 1)
 
     def test_relevance_reflects_absolute_similarity_not_just_rank(self) -> None:
         # RRF fuses ranks, not scores: the sole candidate in a pool always
