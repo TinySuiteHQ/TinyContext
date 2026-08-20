@@ -14,9 +14,10 @@ from tinycontext.services.memory_store_service import (
     record_recall_hits,
     session_exists,
     short_memory_ref,
+    truncated_index_entries,
     update_memory_embeddings,
 )
-from tinycontext.services.token_counter_service import token_count
+from tinycontext.services.token_counter_service import select_within_budget
 
 
 _HIGH_RELEVANCE_THRESHOLD = 0.90
@@ -76,6 +77,7 @@ def memory_recall_run(
     embedding_backend: str = "onnx",
     embedding_openai_env_file: str | None = None,
     embedding_batch_size: int = 32,
+    offset: int = 0,
     rrf_similarity_cutoff: float | None = None,
     dense_weight: float = 0.5,
     access_weight: float = 0.0,
@@ -96,6 +98,10 @@ def memory_recall_run(
             "memories": [],
             "total_tokens": 0,
             "truncated": False,
+            "offset": offset,
+            "next_offset": None,
+            "remaining": 0,
+            "next_entries": [],
         }
 
     model_key = embedding_model_key(
@@ -193,30 +199,37 @@ def memory_recall_run(
             item[1]["bm25_score"],
         ),
         reverse=True,
-    )[:top_k]
+    )
+    # ``offset`` skips whole ranked results, so a caller that hit the token
+    # budget can resume where the previous page stopped. Ranking is
+    # deterministic for a given store and query, so page N+1 lines up with
+    # page N -- but only while the access signal is off; see the
+    # ``record_recall_hits`` call below.
+    window = ranked[offset : offset + top_k]
 
     current_time = _utc_now()
-    selected: list[dict[str, Any]] = []
-    total_tokens = 0
-    truncated = False
-    for rank, (row, scores) in enumerate(ranked, start=1):
-        content_tokens = token_count(row.content, encoding_name)
-        if selected and total_tokens + content_tokens > max_tokens:
-            truncated = True
-            break
-        if not selected and content_tokens > max_tokens:
-            truncated = True
-            selected.append(
-                _memory_payload(row, rank, scores, content_tokens)
-            )
-            total_tokens = content_tokens
-            break
-        selected.append(
-            _memory_payload(row, rank, scores, content_tokens)
-        )
-        total_tokens += content_tokens
+    selection = select_within_budget(
+        window,
+        max_tokens=max_tokens,
+        encoding_name=encoding_name,
+        content_of=lambda item: item[0].content,
+        payload=lambda item, rank, tokens: _memory_payload(
+            item[0], rank, item[1], tokens
+        ),
+        first_rank=offset + 1,
+    )
+    selected = selection.payloads
+    total_tokens = selection.total_tokens
+    next_offset = offset + len(selected)
+    # Everything past this page, including results beyond ``top_k`` -- the
+    # index below can point at them even though this page could not.
+    remaining = max(len(ranked) - next_offset, 0)
+    truncated = remaining > 0
 
-    if selected:
+    # Only the first page counts as a genuine recall. Recording hits on every
+    # page would inflate recall_count purely from scrolling, and (when
+    # access_weight is non-zero) reorder the very ranking being paged through.
+    if selected and offset == 0:
         record_recall_hits(
             db_path,
             [str(memory["id"]) for memory in selected],
@@ -229,6 +242,13 @@ def memory_recall_run(
         "memories": selected,
         "total_tokens": total_tokens,
         "truncated": truncated,
+        "offset": offset,
+        "next_offset": next_offset if truncated else None,
+        "remaining": remaining,
+        "next_entries": truncated_index_entries(
+            [row for row, _scores in ranked[next_offset:]],
+            encoding_name=encoding_name,
+        ),
     }
 
 

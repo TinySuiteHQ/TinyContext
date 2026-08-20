@@ -13,6 +13,7 @@ from typing import Any, Sequence
 import sqlite_vec
 
 from tinycontext.models import MemoryRow
+from tinycontext.services.token_counter_service import resolve_tokenizer
 
 
 _SCHEMA_SQL = """
@@ -66,6 +67,42 @@ CREATE INDEX IF NOT EXISTS idx_memories_kind ON memories(kind);
 
 SHORT_REF_LENGTH = 12
 _SHORT_REF_RE = re.compile(rf"^[0-9a-f]{{{SHORT_REF_LENGTH}}}$")
+
+
+# How many cut memories a truncated recall lists, and how much of each it
+# shows. Bounds the index itself, so a query matching hundreds of memories
+# cannot blow the very budget it just overran.
+INDEX_ENTRY_LIMIT = 10
+INDEX_SNIPPET_TOKENS = 12
+
+
+def truncated_index_entries(
+    rows: Sequence[MemoryRow],
+    *,
+    encoding_name: str | None,
+    limit: int = INDEX_ENTRY_LIMIT,
+    snippet_tokens: int = INDEX_SNIPPET_TOKENS,
+) -> list[dict[str, Any]]:
+    """Build a cheap ref+snippet menu of memories that did not fit.
+
+    Each entry carries a ref, a leading snippet, and the full token cost, so
+    a caller can judge which cut memories are worth fetching outright rather
+    than paging blindly toward them.
+    """
+    tokenizer = resolve_tokenizer(encoding_name)
+    entries: list[dict[str, Any]] = []
+    for row in rows[:limit]:
+        tokens = tokenizer.encode(row.content)
+        entries.append(
+            {
+                "ref": short_memory_ref(row.id),
+                "snippet": tokenizer.decode(tokens[:snippet_tokens]).strip(),
+                "elided": len(tokens) > snippet_tokens,
+                "content_tokens": len(tokens),
+                "created_at": row.created_at,
+            }
+        )
+    return entries
 
 
 def short_memory_ref(memory_id: str) -> str:
@@ -474,6 +511,28 @@ def fetch_recent_memories(
         return [_row_to_memory(row) for row in rows]
 
     return _pool.execute(db_path, _fetch)
+
+
+def count_memories(
+    db_path: Path,
+    *,
+    session_id: str | None = None,
+    kind: str | None = None,
+) -> int:
+    """Count live memories, matching fetch_recent_memories' filters."""
+
+    def _count(conn: sqlite3.Connection) -> int:
+        query = "SELECT COUNT(*) FROM memories WHERE superseded_by IS NULL"
+        params: list[Any] = []
+        if session_id is not None:
+            query += " AND session_id = ?"
+            params.append(session_id)
+        if kind is not None:
+            query += " AND kind = ?"
+            params.append(kind)
+        return int(conn.execute(query, params).fetchone()[0])
+
+    return _pool.execute(db_path, _count)
 
 
 def update_memory_embeddings(

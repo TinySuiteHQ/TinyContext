@@ -168,12 +168,13 @@ async def _run_sse_async() -> None:
 
 
 MCP_INSTRUCTIONS = """
-This MCP server exposes four tools:
+This MCP server exposes five tools:
 
 1. save_memories(memories)
-2. recall_memories(query=None, top_k=None)
-3. update_memory(memory_id, content)
-4. delete_memory(memory_id)
+2. recall_memories(query=None, top_k=None, offset=0)
+3. get_memory(memory_id)
+4. update_memory(memory_id, content)
+5. delete_memory(memory_id)
 
 Use recall_memories with a query before answering whenever the user references
 something that could have been said before: their name, preferences, a project,
@@ -198,6 +199,44 @@ Don't be shy about calling save_memories -- writes are cheap and recall's
 token budgeting is what keeps things affordable, not gatekeeping what you
 save. When genuinely unsure whether something is worth keeping, save it.
 
+Save whatever you find worth keeping -- that judgment is yours, and this
+server would rather hold too much than too little. The guidance below is
+about the SHAPE of a write, never about withholding one.
+
+When a single observation contains several facts that could be recalled
+independently, pass it as several list entries rather than one long entry.
+save_memories takes a list for exactly this reason. The same content is
+kept either way; splitting only changes what retrieval can reach.
+
+  One entry -- everything rises or falls together:
+    [{"content": "OSINT note on @exampleuser: 59K subs, 105 videos, joined
+      Apr 2023. Runs an Amazon storefront and a membership tier. Contact is
+      user@example.com. No Patreon found."}]
+
+  Same content, four entries -- each rank, update, and expire on its own:
+    [{"content": "@exampleuser (YouTube) had 59K subscribers and 105 videos
+      as of Aug 2026; channel created Apr 2023."},
+     {"content": "@exampleuser monetizes via an Amazon Influencer storefront
+      and a paid channel membership tier."},
+     {"content": "@exampleuser's public contact address is
+      user@example.com."},
+     {"content": "@exampleuser has no Patreon; checked Aug 2026."}]
+
+Keep each entry standing on its own. Repeat the subject in every one rather
+than leaving "she", "the channel", or "it" pointing at a sibling memory that
+may never be recalled alongside it. Where the facts came from and when is
+worth repeating too, since that is what makes a stale one recognisable later.
+
+Why shape matters: ranking scores whole memories. A long one either wins and
+spends its entire length on the single fact that matched, or loses and takes
+every other fact inside it out of reach. Split entries let exactly the
+relevant fact surface, and let update_memory revise one fact without
+rewriting a whole note around it.
+
+None of this is a reason to hold something back. If splitting an observation
+is awkward, or the connective tissue between the facts IS the insight, save
+it whole -- an unsplit memory beats a lost one.
+
 Save identity and preference facts -- what to call the user, what they call
 you, how they like you to work, their role -- with kind="profile" instead of
 the default "episodic". Profile memories aren't ranked or searched; they are
@@ -218,6 +257,20 @@ Use delete_memory when the user asks to forget or remove something that was
 previously saved outright (not correct it -- use update_memory for that).
 Recall first to find the memory's ref (the short hex id on each <memory>
 tag), then delete by that ref.
+
+A <truncated> tag means more memories matched than fit the response's token
+budget, and the list was cut off at that point. It is not an empty result and
+not an error: what came back is the top of the list, and the rest is still
+stored. The tag carries two ways to reach the rest, and you should use them
+rather than concluding the store is small:
+
+  - <entry> lines inside it are the next memories, as ref + opening snippet.
+    Pass a ref to get_memory to read exactly that one in full. Prefer this
+    when a snippet tells you which memory you actually want -- it costs one
+    memory's tokens instead of a whole page.
+  - next_offset is where the list stopped. Call recall_memories again with
+    the same query and offset=next_offset to continue in order. Prefer this
+    when you need to survey everything rather than one known item.
 
 A <notice> tag in a response is informational, not an error — proceed with
 whatever results came back.
@@ -268,6 +321,11 @@ def _format_recalled_memories(payload: dict[str, Any]) -> str:
     current_time = quoteattr(str(payload["current_time"]))
     mode = payload.get("mode")
     mode_attribute = f" mode={quoteattr(str(mode))}" if mode else ""
+    remaining = int(payload.get("remaining") or 0)
+    if remaining > 0:
+        mode_attribute += (
+            f' truncated="true" remaining={quoteattr(str(remaining))}'
+        )
     blocks: list[str] = []
     profile_block = _format_profile_block(payload.get("profile", []))
     if profile_block:
@@ -290,6 +348,39 @@ def _format_recalled_memories(payload: dict[str, Any]) -> str:
                 attributes += f' relevance="{escape(str(memory["relevance"]))}"'
             attributes += f" created_at={created_at}"
             lines.extend((f"<memory {attributes}>", escape(str(memory["content"])), "</memory>"))
+        if remaining > 0:
+            next_offset = payload.get("next_offset")
+            attributes = f"remaining={quoteattr(str(remaining))}"
+            if next_offset is not None:
+                attributes += f" next_offset={quoteattr(str(next_offset))}"
+            lines.append(f"<truncated {attributes}>")
+            lines.append(
+                f"{remaining} more matching "
+                f"{'memory' if remaining == 1 else 'memories'} did not fit the "
+                "token budget and were cut off here."
+            )
+            entries = payload.get("next_entries") or []
+            if entries:
+                lines.append("Next up:")
+                for entry in entries:
+                    snippet = escape(str(entry["snippet"]))
+                    if entry.get("elided"):
+                        snippet += "…"
+                    lines.append(
+                        f'<entry ref={quoteattr(str(entry["ref"]))} '
+                        f'tokens={quoteattr(str(entry["content_tokens"]))} '
+                        f'created_at={quoteattr(str(entry["created_at"]))}>'
+                        f"{snippet}</entry>"
+                    )
+                lines.append(
+                    "Read any of these in full with get_memory(ref)"
+                    + (
+                        f", or continue the list with offset={next_offset}."
+                        if next_offset is not None
+                        else "."
+                    )
+                )
+            lines.append("</truncated>")
     lines.append("</recalled_memories>")
     blocks.append("\n".join(lines))
     return "\n".join(blocks)
@@ -309,10 +400,14 @@ mcp = FastMCP(
     name="save_memories",
     title="Save Memories",
     description=(
-        "Persist one or more concise memories for later recall. Each memory needs "
-        "content, and defaults to kind='episodic'; use kind='profile' for durable "
-        "identity/preference facts, which are always attached to every "
-        "recall_memories response instead of needing a separate lookup."
+        "Persist one or more memories for later recall. Save anything worth "
+        "keeping; when one observation holds several independently useful "
+        "facts, prefer passing them as several list entries rather than one "
+        "long entry, since ranking scores whole memories. Each memory needs "
+        "content, and defaults to kind='episodic'; "
+        "use kind='profile' for durable identity/preference facts, which are "
+        "always attached to every recall_memories response instead of needing a "
+        "separate lookup."
     ),
 )
 async def save_memories_tool(
@@ -320,10 +415,12 @@ async def save_memories_tool(
         list[dict[str, Any]],
         Field(
             description=(
-                "List of memory objects. Each object must include content, and "
-                "may set kind to 'profile' (durable identity/preference facts: "
-                "what to call the user, what they call you, how they like to "
-                "work) or 'episodic' (default; everything else)."
+                "List of memory objects, each self-contained. Prefer splitting "
+                "a multi-fact observation across entries over concatenating it "
+                "into one. Each object must include content, "
+                "and may set kind to 'profile' (durable identity/preference "
+                "facts: what to call the user, what they call you, how they "
+                "like to work) or 'episodic' (default; everything else)."
             )
         ),
     ],
@@ -378,14 +475,27 @@ async def recall_memories_tool(
             ),
         ),
     ] = None,
+    offset: Annotated[
+        int,
+        Field(
+            default=0,
+            ge=0,
+            description=(
+                "Skip this many results before returning any. Use the "
+                "next_offset value from a truncated response to continue "
+                "reading where it left off."
+            ),
+        ),
+    ] = 0,
 ) -> str:
     started = time.monotonic()
-    _log(f"recall_memories called query={query!r} top_k={top_k}")
+    _log(f"recall_memories called query={query!r} top_k={top_k} offset={offset}")
     config = tenant_config(load_context_config())
     try:
         payload = core.recall_memories(
             query,
             top_k=top_k,
+            offset=offset,
             config=config,
         )
     except MemoryError as exc:
@@ -400,6 +510,39 @@ async def recall_memories_tool(
         f"elapsed={elapsed:.2f}s"
     )
     return _format_recalled_memories(payload)
+
+
+@mcp.tool(
+    name="get_memory",
+    title="Get Memory",
+    description=(
+        "Fetch one memory in full by its ref (the short hex id shown on every "
+        "<memory> and <entry> tag). Use this to read a specific memory that a "
+        "truncated recall listed but could not include."
+    ),
+)
+async def get_memory_tool(
+    memory_id: Annotated[
+        str,
+        Field(description="The memory's ref (short hex id) or full id."),
+    ],
+) -> dict[str, Any]:
+    started = time.monotonic()
+    _log(f"get_memory called memory_id={memory_id!r}")
+    config = tenant_config(load_context_config())
+    try:
+        payload = core.get_memory(memory_id, config=config)
+    except MemoryError as exc:
+        elapsed = time.monotonic() - started
+        code = MEMORY_ERROR_MAP.get(type(exc), ("internal_error", 500))[0]
+        _log(f"get_memory failed elapsed={elapsed:.2f}s code={code} error={exc!r}")
+        raise _memory_tool_error(exc) from exc
+    elapsed = time.monotonic() - started
+    _log(
+        f"get_memory returning ref={payload['ref']} "
+        f"tokens={payload['content_tokens']} elapsed={elapsed:.2f}s"
+    )
+    return payload
 
 
 @mcp.tool(

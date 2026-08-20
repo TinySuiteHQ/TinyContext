@@ -26,6 +26,7 @@ from tinycontext.services.embedding_reindex_service import (
 from tinycontext.services.embedding_service import embed_texts, embedding_model_key
 from tinycontext.services.memory_store_service import (
     clear_superseded_by,
+    count_memories,
     delete_memory as _delete_memory_row,
     embedding_model_mismatch_count,
     embedding_storage_stats,
@@ -33,12 +34,17 @@ from tinycontext.services.memory_store_service import (
     fetch_memory_by_id,
     fetch_recent_memories,
     find_memory_ids_by_ref,
+    INDEX_ENTRY_LIMIT,
     insert_memories,
     looks_like_short_ref,
     short_memory_ref,
     supersede_memory,
+    truncated_index_entries,
 )
-from tinycontext.services.token_counter_service import token_count
+from tinycontext.services.token_counter_service import (
+    select_within_budget,
+    token_count,
+)
 
 
 def _kick_off_background_reindex(resolved: dict[str, Any], db_path: Path) -> str | None:
@@ -174,6 +180,7 @@ def recall_memories(
     session_id: str | None = None,
     max_tokens: int | None = None,
     top_k: int | None = None,
+    offset: int = 0,
     config: ConfigInput | None = None,
 ) -> dict[str, Any]:
     """Recall memories relevant to ``query``, or the newest ones if omitted.
@@ -188,6 +195,8 @@ def recall_memories(
         raise RecallBudgetError("max_tokens must be at least 1")
     if top_k is not None and top_k < 1:
         raise RecallBudgetError("top_k must be at least 1")
+    if offset < 0:
+        raise RecallBudgetError("offset must not be negative")
 
     resolved = _resolved_values(config)
     db_path = Path(str(resolved["memory_db_path"]))
@@ -197,6 +206,7 @@ def recall_memories(
             session_id=session_id,
             max_tokens=max_tokens,
             top_k=top_k or _RECENT_MODE_DEFAULT_TOP_K,
+            offset=offset,
             resolved=resolved,
             db_path=db_path,
         )
@@ -209,6 +219,7 @@ def recall_memories(
         session_id=session_id,
         max_tokens=max_tokens or int(resolved["recall_max_tokens"]),
         top_k=top_k or int(resolved["recall_top_k"]),
+        offset=offset,
         db_path=db_path,
         encoding_name=str(resolved["encoding_name"]),
         models_dir=Path(str(resolved["models_dir"])),
@@ -241,20 +252,13 @@ def _fetch_profile_block(resolved: dict[str, Any], db_path: Path) -> list[dict[s
     if not rows:
         return []
 
-    encoding_name = str(resolved["encoding_name"])
-    profile_max_tokens = int(resolved["profile_max_tokens"])
-    selected: list[dict[str, Any]] = []
-    total_tokens = 0
-    for rank, row in enumerate(rows, start=1):
-        content_tokens = token_count(row.content, encoding_name)
-        if not selected and content_tokens > profile_max_tokens:
-            selected.append(_recent_memory_payload(row, rank, content_tokens))
-            break
-        if selected and total_tokens + content_tokens > profile_max_tokens:
-            break
-        selected.append(_recent_memory_payload(row, rank, content_tokens))
-        total_tokens += content_tokens
-    return selected
+    return select_within_budget(
+        rows,
+        max_tokens=int(resolved["profile_max_tokens"]),
+        encoding_name=str(resolved["encoding_name"]),
+        content_of=lambda row: row.content,
+        payload=_recent_memory_payload,
+    ).payloads
 
 
 def _recall_recent_memories(
@@ -262,41 +266,52 @@ def _recall_recent_memories(
     session_id: str | None,
     max_tokens: int | None,
     top_k: int,
+    offset: int,
     resolved: dict[str, Any],
     db_path: Path,
 ) -> dict[str, Any]:
     """Return the newest durable memories within the configured token budget."""
+    # Read past the window by exactly as many rows as the truncation index
+    # can display: enough to fill it, and no more. The true "how much is
+    # left" figure comes from count_memories below, not from this limit.
+    index_lookahead = INDEX_ENTRY_LIMIT
     rows = fetch_recent_memories(
-        db_path, session_id=session_id, kind="episodic", limit=top_k
+        db_path,
+        session_id=session_id,
+        kind="episodic",
+        limit=offset + top_k + index_lookahead,
     )
     if session_id is not None and not rows:
         raise SessionNotFoundError(f"session not found: {session_id}")
 
-    current_time = _utc_now_iso()
-    selected: list[dict[str, Any]] = []
-    total_tokens = 0
-    truncated = False
-    resolved_max_tokens = max_tokens or int(resolved["recall_max_tokens"])
     encoding_name = str(resolved["encoding_name"])
-    for rank, row in enumerate(rows, start=1):
-        content_tokens = token_count(row.content, encoding_name)
-        if selected and total_tokens + content_tokens > resolved_max_tokens:
-            truncated = True
-            break
-        if not selected and content_tokens > resolved_max_tokens:
-            truncated = True
-            selected.append(_recent_memory_payload(row, rank, content_tokens))
-            total_tokens = content_tokens
-            break
-        selected.append(_recent_memory_payload(row, rank, content_tokens))
-        total_tokens += content_tokens
+    window = rows[offset : offset + top_k]
+    current_time = _utc_now_iso()
+    selection = select_within_budget(
+        window,
+        max_tokens=max_tokens or int(resolved["recall_max_tokens"]),
+        encoding_name=encoding_name,
+        content_of=lambda row: row.content,
+        payload=_recent_memory_payload,
+        first_rank=offset + 1,
+    )
+    selected = selection.payloads
+    next_offset = offset + len(selected)
+    total = count_memories(db_path, session_id=session_id, kind="episodic")
+    remaining = max(total - next_offset, 0)
 
     return {
         "mode": "recent",
         "current_time": current_time,
         "memories": selected,
-        "total_tokens": total_tokens,
-        "truncated": truncated,
+        "total_tokens": selection.total_tokens,
+        "truncated": remaining > 0,
+        "offset": offset,
+        "next_offset": next_offset if remaining else None,
+        "remaining": remaining,
+        "next_entries": truncated_index_entries(
+            rows[next_offset:], encoding_name=encoding_name
+        ),
     }
 
 
@@ -327,6 +342,37 @@ def _resolve_memory_id(db_path: Path, memory_id: str) -> str:
             "use the full id instead"
         )
     return matches[0]
+
+
+def get_memory(
+    memory_id: str,
+    *,
+    config: ConfigInput | None = None,
+) -> dict[str, Any]:
+    """Fetch one memory in full by ref or id.
+
+    Recall is token-bounded, so a large result set gets cut off. This is the
+    escape hatch: refs surfaced in a truncated response can be dereferenced
+    here without widening the budget for everything else.
+    """
+    resolved = _resolved_values(config)
+    db_path = Path(str(resolved["memory_db_path"]))
+    encoding_name = str(resolved["encoding_name"])
+    resolved_id = _resolve_memory_id(db_path, memory_id)
+    row = fetch_memory_by_id(db_path, resolved_id)
+    if row is None:
+        raise MemoryNotFoundError(f"no memory found with id {memory_id!r}")
+    return {
+        "id": row.id,
+        "ref": short_memory_ref(row.id),
+        "content": row.content,
+        "kind": row.kind,
+        "created_at": row.created_at,
+        "content_tokens": token_count(row.content, encoding_name),
+        "superseded_by": (
+            short_memory_ref(row.superseded_by) if row.superseded_by else None
+        ),
+    }
 
 
 def update_memory(

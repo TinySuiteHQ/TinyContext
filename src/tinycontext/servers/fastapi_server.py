@@ -70,6 +70,7 @@ class RecallMemoriesRequest(BaseModel):
     session_id: str | None = None
     max_tokens: int | None = Field(default=None, ge=1)
     top_k: int | None = Field(default=None, ge=1)
+    offset: int = Field(default=0, ge=0)
 
 
 class DeleteMemoryRequest(BaseModel):
@@ -139,6 +140,7 @@ async def recall_memories_endpoint(request: RecallMemoriesRequest) -> dict[str, 
             session_id=request.session_id,
             max_tokens=request.max_tokens,
             top_k=request.top_k,
+            offset=request.offset,
             config=config,
         )
     except MemoryError as exc:
@@ -151,6 +153,7 @@ async def recall_memories_get(
     session_id: str | None = None,
     max_tokens: int | None = Query(default=None, ge=1),
     top_k: int | None = Query(default=None, ge=1),
+    offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
     return await recall_memories_endpoint(
         RecallMemoriesRequest(
@@ -158,8 +161,18 @@ async def recall_memories_get(
             session_id=session_id,
             max_tokens=max_tokens,
             top_k=top_k,
+            offset=offset,
         )
     )
+
+
+@app.get("/get_memory")
+async def get_memory_endpoint(memory_id: str = Query(..., min_length=1)) -> dict[str, Any]:
+    config = tenant_config(load_context_config())
+    try:
+        return core.get_memory(memory_id, config=config)
+    except MemoryError as exc:
+        _raise_memory_http_error(exc)
 
 
 @app.post("/delete_memory")

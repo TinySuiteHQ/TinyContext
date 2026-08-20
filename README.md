@@ -62,18 +62,29 @@ Check the resolved configuration and storage readiness with:
 uvx --python 3.12 --from "tinysuite-context[server]" tinycontext doctor
 ```
 
-TinyContext exposes four tools:
+TinyContext exposes five tools:
 
 ```text
 save_memories(memories)
-recall_memories(query=None, top_k=None)
+recall_memories(query=None, top_k=None, offset=0)
+get_memory(memory_id)
+update_memory(memory_id, content)
 delete_memory(memory_id)
 ```
 
 - Use `save_memories` for durable facts, preferences, decisions, and research notes. Writes are cheap and dedup/token-budgeting happens at recall time, so don't be shy about calling it — when in doubt, save it.
+- Prefer **several entries over one long entry** when an observation holds facts that could be recalled independently — `save_memories` takes a list for exactly that reason, and the same content is kept either way. Retrieval ranks whole memories, so a long one either wins and spends its entire length on the single fact that matched, or loses and takes every other fact inside it out of reach. Keep each entry self-contained (repeat the subject rather than leaving a pronoun pointing at a sibling that may never be recalled alongside it). This is guidance about shape, not a reason to withhold a write: if splitting is awkward, or the connective tissue between the facts *is* the insight, save it whole.
 - Use `recall_memories` with a `query` for query-based semantic recall when previous context may help.
 - Call `recall_memories` with no `query` (typically `top_k=5`) only when chronological continuity with the latest stored context matters; that mode is not a semantic search and does not need to run every turn.
+- Use `get_memory` to read one memory in full by its `ref`. Recall is bounded by a token budget, so a large result set gets cut off; `get_memory` is how you reach a specific memory the cut left out without widening the budget for everything else.
 - Use `delete_memory` to forget or correct a previously saved memory (find its `ref` via `recall_memories` first).
+
+When a recall does not fit its token budget the response carries a `<truncated>`
+block naming what was cut. It lists the next memories as `ref` + opening snippet
++ token cost, and a `next_offset`. Fetch one by `ref` with `get_memory`, or pass
+`offset=next_offset` back to `recall_memories` to continue the same ranking where
+it stopped. Paged reads (`offset > 0`) deliberately do not count as recalls, so
+scrolling never inflates `recall_count` or disturbs the ranking being paged.
 
 Each memory saved via `save_memories` can set `kind` to `"episodic"` (default)
 or `"profile"`. Profile memories are for durable identity/preference facts —
@@ -339,6 +350,7 @@ The optional HTTP API mirrors the MCP tools.
 | GET | `/health` | Liveness |
 | POST/GET | `/save_memories` | Persist one or more memories |
 | POST/GET | `/recall_memories` | Recall memories within a token budget: semantically ranked with a `query`, or newest-first without one |
+| GET | `/get_memory` | Fetch one memory in full by ref or id |
 | POST | `/delete_memory` | Delete a single memory by id |
 
 Install and run it directly:
@@ -499,7 +511,7 @@ uvicorn servers.fastapi_server:app --host 0.0.0.0 --port 8000
 
 ## Entrypoints
 
-- `tinycontext.save_memories`, `tinycontext.recall_memories`, and `tinycontext.delete_memory`: Python API
+- `tinycontext.save_memories`, `tinycontext.recall_memories`, `tinycontext.get_memory`, and `tinycontext.delete_memory`: Python API
 - `tinycontext` / `tinycontext mcp`: stdio MCP
 - `tinycontext serve`: Streamable HTTP MCP
 - `tinycontext doctor`: configuration and storage readiness

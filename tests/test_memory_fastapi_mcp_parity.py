@@ -11,11 +11,13 @@ from tinycontext.servers.fastapi_server import (
     RecallMemoriesRequest,
     SaveMemoriesRequest,
     UpdateMemoryRequest,
+    get_memory_endpoint,
     recall_memories_endpoint,
     save_memories_endpoint,
     update_memory_endpoint,
 )
 from tinycontext.servers.mcp_server import (
+    get_memory_tool,
     recall_memories_tool,
     save_memories_tool,
     update_memory_tool,
@@ -98,6 +100,26 @@ class MemoryFastApiMcpParityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             set(fastapi_payload["supersedes"]), set(mcp_payload["supersedes"])
         )
+
+    async def test_get_memory_parity(self) -> None:
+        with patch(
+            "tinycontext.servers.fastapi_server.load_context_config",
+            return_value=self.config,
+        ):
+            saved = await save_memories_endpoint(
+                SaveMemoriesRequest(
+                    memories=[MemoryInputModel(content="sqlite storage notes")],
+                )
+            )
+            ref = saved["saved"][0]["ref"]
+            fastapi_payload = await get_memory_endpoint(memory_id=ref)
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            mcp_payload = await _fn(get_memory_tool)(ref)
+        self.assertEqual(set(fastapi_payload), set(mcp_payload))
+        self.assertEqual(fastapi_payload, mcp_payload)
 
     async def test_recall_memories_adapters_share_recalled_content(self) -> None:
         save_memories(

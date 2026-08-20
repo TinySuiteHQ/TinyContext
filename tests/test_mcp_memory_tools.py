@@ -228,7 +228,8 @@ class McpMemoryToolTests(unittest.IsolatedAsyncioTestCase):
             schemas,
             {
                 "save_memories": {"memories"},
-                "recall_memories": {"query", "top_k"},
+                "recall_memories": {"query", "top_k", "offset"},
+                "get_memory": {"memory_id"},
                 "update_memory": {"memory_id", "content"},
                 "delete_memory": {"memory_id"},
             },
