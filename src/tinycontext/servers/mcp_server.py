@@ -190,7 +190,11 @@ Call recall_memories with no query (or top_k=5 and no query) when the
 chronological continuation of the latest stored context matters, such as
 resuming a recent thread, instead. This returns a bounded, newest-first view
 and is not a semantic search. Do not call it unconditionally on every turn;
-use it when recent continuity is relevant.
+use it when recent continuity is relevant. This mode has no date-range
+awareness -- for a date-scoped question like "what did we do last week" or
+"since Monday", skip recall_memories entirely and call
+list_memories(since=, until=) directly instead of trying recall_memories
+first.
 
 Use save_memories to persist short, durable facts, preferences, or decisions
 that would be useful in a future conversation. Each memory should be concise
@@ -199,6 +203,15 @@ one-off task details, or anything already obvious from the code/repo itself.
 Don't be shy about calling save_memories -- writes are cheap and recall's
 token budgeting is what keeps things affordable, not gatekeeping what you
 save. When genuinely unsure whether something is worth keeping, save it.
+
+A saved item's response can carry two advisory signals -- neither blocks the
+save, both are worth acting on: a "notice" when the memory is unusually long
+(over ~400 tokens by default), suggesting you split it into smaller atomic
+facts instead of one large block; and a "similar_to" ref+similarity when it
+closely resembles an existing memory that wasn't close enough to auto-skip --
+prefer update_memory on that ref to consolidate rather than leaving both
+versions around. A "skipped_duplicates" entry, by contrast, means a
+near-identical memory already existed and this one was not saved at all.
 
 Save identity and preference facts -- what to call the user, what they call
 you, how they like you to work, their role -- with kind="profile" instead of
@@ -436,7 +449,9 @@ async def save_memories_tool(
         "Retrieve prompt-ready memories within a token budget. With a query, runs "
         "hybrid semantic search and labels each memory high, medium, or low "
         "relevance. With no query, returns the newest stored memories in "
-        "chronological order instead (not semantic search)."
+        "chronological order instead (not semantic search, and not date-range "
+        "aware -- for 'what did we do last week' or any other date-scoped "
+        "question, use list_memories(since=, until=) directly instead)."
     ),
 )
 async def recall_memories_tool(

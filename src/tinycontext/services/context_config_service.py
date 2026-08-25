@@ -42,7 +42,12 @@ def _environment_overrides() -> dict[str, Any]:
         ("TINYCONTEXT_DENSE_QUERY_PREFIX", "dense_query_prefix"),
         ("TINYCONTEXT_DENSE_DOCUMENT_PREFIX", "dense_document_prefix"),
         ("TINYCONTEXT_DEDUP_SIMILARITY_THRESHOLD", "dedup_similarity_threshold"),
+        (
+            "TINYCONTEXT_DEDUP_REVIEW_SIMILARITY_THRESHOLD",
+            "dedup_review_similarity_threshold",
+        ),
         ("TINYCONTEXT_RECALL_ACCESS_WEIGHT", "recall_access_weight"),
+        ("TINYCONTEXT_SAVE_LENGTH_NOTICE_TOKENS", "save_length_notice_tokens"),
     ):
         raw_value = os.environ.get(env_name, "")
         value = (

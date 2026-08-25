@@ -30,7 +30,9 @@ def default_config() -> dict[str, Any]:
         "dense_query_prefix": "",
         "dense_document_prefix": "",
         "dedup_similarity_threshold": 0.95,
+        "dedup_review_similarity_threshold": 0.80,
         "recall_access_weight": 0.0,
+        "save_length_notice_tokens": 400,
     }
 
 
@@ -82,6 +84,7 @@ def normalize_config(
         "recall_max_tokens",
         "profile_max_tokens",
         "embedding_batch_size",
+        "save_length_notice_tokens",
     ):
         try:
             value = int(config[key])
@@ -122,6 +125,16 @@ def normalize_config(
     if dedup_threshold <= 0.0 or dedup_threshold > 1.0:
         raise ValueError("dedup_similarity_threshold must be greater than 0 and at most 1")
     config["dedup_similarity_threshold"] = dedup_threshold
+
+    try:
+        dedup_review_threshold = float(config["dedup_review_similarity_threshold"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("dedup_review_similarity_threshold must be a number") from exc
+    if dedup_review_threshold <= 0.0 or dedup_review_threshold > 1.0:
+        raise ValueError(
+            "dedup_review_similarity_threshold must be greater than 0 and at most 1"
+        )
+    config["dedup_review_similarity_threshold"] = dedup_review_threshold
 
     try:
         access_weight = float(config["recall_access_weight"])

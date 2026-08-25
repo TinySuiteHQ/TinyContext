@@ -25,6 +25,8 @@ class PublicConfigTests(unittest.TestCase):
         )
         self.assertEqual(config["recall_top_k"], 10)
         self.assertEqual(config["recall_rrf_cutoff"], 0.0)
+        self.assertEqual(config["dedup_review_similarity_threshold"], 0.80)
+        self.assertEqual(config["save_length_notice_tokens"], 400)
         self.assertEqual(config["embedding_backend"], "onnx")
         self.assertEqual(config["embedding_openai_env_file"], ".env")
         json.dumps(config.to_dict())
@@ -94,6 +96,12 @@ class PublicConfigTests(unittest.TestCase):
             TinyContextConfig(dedup_similarity_threshold=1.1)
         with self.assertRaisesRegex(ValueError, "dedup_similarity_threshold"):
             TinyContextConfig(dedup_similarity_threshold=0.0)
+        with self.assertRaisesRegex(ValueError, "dedup_review_similarity_threshold"):
+            TinyContextConfig(dedup_review_similarity_threshold=1.1)
+        with self.assertRaisesRegex(ValueError, "dedup_review_similarity_threshold"):
+            TinyContextConfig(dedup_review_similarity_threshold=0.0)
+        with self.assertRaisesRegex(ValueError, "save_length_notice_tokens"):
+            TinyContextConfig(save_length_notice_tokens=0)
         with self.assertRaisesRegex(ValueError, "recall_access_weight"):
             TinyContextConfig(recall_access_weight=1.1)
         with self.assertRaisesRegex(ValueError, "recall_access_weight"):
@@ -144,7 +152,9 @@ class ServerConfigTests(unittest.TestCase):
                     "TINYCONTEXT_RECALL_DENSE_WEIGHT": "0.75",
                     "TINYCONTEXT_DENSE_QUERY_PREFIX": "query: ",
                     "TINYCONTEXT_DEDUP_SIMILARITY_THRESHOLD": "0.9",
+                    "TINYCONTEXT_DEDUP_REVIEW_SIMILARITY_THRESHOLD": "0.7",
                     "TINYCONTEXT_RECALL_ACCESS_WEIGHT": "0.2",
+                    "TINYCONTEXT_SAVE_LENGTH_NOTICE_TOKENS": "250",
                 },
                 clear=True,
             ):
@@ -164,7 +174,9 @@ class ServerConfigTests(unittest.TestCase):
         self.assertEqual(config["recall_dense_weight"], 0.75)
         self.assertEqual(config["dense_query_prefix"], "query: ")
         self.assertEqual(config["dedup_similarity_threshold"], 0.9)
+        self.assertEqual(config["dedup_review_similarity_threshold"], 0.7)
         self.assertEqual(config["recall_access_weight"], 0.2)
+        self.assertEqual(config["save_length_notice_tokens"], 250)
 
     def test_explicit_config_path_wins(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir, patch.dict(

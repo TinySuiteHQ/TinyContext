@@ -111,6 +111,8 @@ def save_memories(
         document_prefix=str(resolved["dense_document_prefix"]),
     )
     dedup_threshold = float(resolved["dedup_similarity_threshold"])
+    dedup_review_threshold = float(resolved["dedup_review_similarity_threshold"])
+    length_notice_tokens = int(resolved["save_length_notice_tokens"])
     saved: list[dict[str, Any]] = []
     skipped_duplicates: list[dict[str, Any]] = []
     for (content, kind), vector in zip(normalized_items, vectors, strict=True):
@@ -125,6 +127,7 @@ def save_memories(
             session_id=item_session_id,
             kind=kind,
         )
+        similar_to: dict[str, Any] | None = None
         if scores:
             duplicate_id, similarity = max(scores.items(), key=lambda kv: kv[1])
             if similarity >= dedup_threshold:
@@ -135,6 +138,15 @@ def save_memories(
                     }
                 )
                 continue
+            if similarity >= dedup_review_threshold:
+                # Not similar enough to auto-skip, but close enough that it's
+                # probably a near-duplicate wording of an existing memory --
+                # surface it so the caller can consolidate with update_memory
+                # instead of the store quietly accumulating restated copies.
+                similar_to = {
+                    "ref": short_memory_ref(duplicate_id),
+                    "similarity": round(similarity, 4),
+                }
         memory_id = str(uuid.uuid4())
         created_at = _utc_now_iso()
         row = MemoryRow(
@@ -148,16 +160,24 @@ def save_memories(
             kind=kind,
         )
         insert_memories(db_path, [row])
-        saved.append(
-            {
-                "id": memory_id,
-                "ref": short_memory_ref(memory_id),
-                "session_id": item_session_id,
-                "kind": kind,
-                "content_tokens": token_count(content, encoding_name),
-                "created_at": created_at,
-            }
-        )
+        content_tokens = token_count(content, encoding_name)
+        saved_item: dict[str, Any] = {
+            "id": memory_id,
+            "ref": short_memory_ref(memory_id),
+            "session_id": item_session_id,
+            "kind": kind,
+            "content_tokens": content_tokens,
+            "created_at": created_at,
+        }
+        if similar_to is not None:
+            saved_item["similar_to"] = similar_to
+        if content_tokens > length_notice_tokens:
+            saved_item["notice"] = (
+                f"This memory is {content_tokens} tokens, above the recommended "
+                f"{length_notice_tokens} -- consider splitting it into smaller, "
+                "atomic facts for cleaner recall."
+            )
+        saved.append(saved_item)
     result: dict[str, Any] = {"saved": saved}
     if skipped_duplicates:
         result["skipped_duplicates"] = skipped_duplicates

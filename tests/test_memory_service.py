@@ -360,6 +360,38 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(payload["saved"]), 1)
         self.assertNotIn("skipped_duplicates", payload)
 
+    def test_save_memories_flags_long_content_with_a_notice(self) -> None:
+        payload = save_memories(
+            [MemoryInput(content="word " * 500)],
+            config=dict(self.config, save_length_notice_tokens=50),
+        )
+        self.assertIn("notice", payload["saved"][0])
+        self.assertIn("50", payload["saved"][0]["notice"])
+
+    def test_save_memories_does_not_flag_short_content(self) -> None:
+        payload = save_memories(
+            [MemoryInput(content="User likes tea")],
+            config=self.config,
+        )
+        self.assertNotIn("notice", payload["saved"][0])
+
+    def test_save_memories_flags_near_duplicate_without_skipping(self) -> None:
+        first = save_memories(
+            [MemoryInput(content="sqlite storage")],
+            config=self.config,
+        )
+        first_ref = first["saved"][0]["ref"]
+        payload = save_memories(
+            [MemoryInput(content="sqlite storage python")],
+            config=self.config,
+        )
+        self.assertEqual(len(payload["saved"]), 1)
+        self.assertNotIn("skipped_duplicates", payload)
+        self.assertIn("similar_to", payload["saved"][0])
+        self.assertEqual(payload["saved"][0]["similar_to"]["ref"], first_ref)
+        self.assertGreaterEqual(payload["saved"][0]["similar_to"]["similarity"], 0.80)
+        self.assertLess(payload["saved"][0]["similar_to"]["similarity"], 0.95)
+
     def test_save_memories_lower_threshold_skips_related_content(self) -> None:
         save_memories(
             [MemoryInput(content="sqlite storage python backend")],
