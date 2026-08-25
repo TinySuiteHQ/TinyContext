@@ -580,8 +580,15 @@ def fetch_dense_scores(
     embedding_model: str,
     session_id: str | None = None,
     kind: str | None = None,
+    limit: int | None = None,
 ) -> dict[str, float]:
-    """Run cosine similarity inside SQLite through sqlite-vec."""
+    """Run cosine similarity inside SQLite through sqlite-vec.
+
+    ``limit`` bounds the result to the top-scoring rows (SQLite still has to
+    evaluate the distance function for every filtered row to sort them --
+    there's no ANN index underneath -- but bounding the result avoids
+    hydrating and ranking the full corpus in Python on every recall).
+    """
     if not query_embedding:
         return {}
 
@@ -594,6 +601,7 @@ def fetch_dense_scores(
         WHERE embedding IS NOT NULL
           AND embedding_model = ?
           AND embedding_dimensions = ?
+          AND superseded_by IS NULL
         """
         params: list[Any] = [
             sqlite_vec.serialize_float32(query_embedding),
@@ -607,6 +615,9 @@ def fetch_dense_scores(
             query += " AND kind = ?"
             params.append(kind)
         query += " ORDER BY dense_score DESC, created_at DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(int(limit))
         rows = conn.execute(query, params).fetchall()
         return {str(row["id"]): float(row["dense_score"]) for row in rows}
 
@@ -619,11 +630,14 @@ def fetch_sparse_scores(
     *,
     session_id: str | None = None,
     kind: str | None = None,
+    limit: int | None = None,
 ) -> dict[str, float]:
     """Run BM25 keyword scoring inside SQLite through the FTS5 index.
 
     FTS5's bm25() returns lower-is-better values (0 or negative), so results
     are negated to match the higher-is-better convention used elsewhere.
+    ``limit`` bounds the result to the best-scoring rows, index-backed by
+    FTS5's own match ordering.
     """
     tokens = _FTS_TOKEN_RE.findall(query.lower())
     if not tokens:
@@ -636,6 +650,7 @@ def fetch_sparse_scores(
         FROM memories_fts
         JOIN memories ON memories.id = memories_fts.id
         WHERE memories_fts MATCH ?
+          AND memories.superseded_by IS NULL
         """
         params: list[Any] = [match_query]
         if session_id is not None:
@@ -644,8 +659,93 @@ def fetch_sparse_scores(
         if kind is not None:
             sql += " AND memories.kind = ?"
             params.append(kind)
+        sql += " ORDER BY bm25(memories_fts) ASC"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(int(limit))
         rows = conn.execute(sql, params).fetchall()
         return {str(row["id"]): -float(row["score"]) for row in rows}
+
+    return _pool.execute(db_path, _fetch)
+
+
+def fetch_memories_by_ids(db_path: Path, ids: Sequence[str]) -> list[MemoryRow]:
+    """Fetch full rows for a specific, already-known id set (e.g. a fused candidate pool)."""
+    unique_ids = list(dict.fromkeys(ids))
+    if not unique_ids:
+        return []
+
+    def _fetch(conn: sqlite3.Connection) -> list[MemoryRow]:
+        placeholders = ",".join("?" for _ in unique_ids)
+        rows = conn.execute(
+            f"""
+            SELECT
+              id,
+              session_id,
+              content,
+              created_at,
+              embedding_model,
+              embedding_dimensions,
+              superseded_by,
+              superseded_at,
+              last_recalled_at,
+              recall_count,
+              kind
+            FROM memories
+            WHERE id IN ({placeholders}) AND superseded_by IS NULL
+            """,
+            unique_ids,
+        ).fetchall()
+        return [_row_to_memory(row) for row in rows]
+
+    return _pool.execute(db_path, _fetch)
+
+
+def fetch_stale_memories(
+    db_path: Path,
+    *,
+    session_id: str | None,
+    kind: str | None,
+    embedding_model: str,
+    embedding_dimensions: int,
+) -> list[MemoryRow]:
+    """Fetch rows whose stored embedding doesn't match the current model/dimensions.
+
+    A dedicated, narrow query rather than filtering a full candidate fetch in
+    Python -- in steady state (no embedding model change in flight) this
+    matches nothing and costs a single indexed-ish scan, not a full row
+    hydration of the corpus.
+    """
+
+    def _fetch(conn: sqlite3.Connection) -> list[MemoryRow]:
+        query = """
+        SELECT
+          id,
+          session_id,
+          content,
+          created_at,
+          embedding_model,
+          embedding_dimensions,
+          superseded_by,
+          superseded_at,
+          last_recalled_at,
+          recall_count,
+          kind
+        FROM memories
+        WHERE superseded_by IS NULL
+          AND (embedding_model IS NULL
+               OR embedding_model != ?
+               OR embedding_dimensions != ?)
+        """
+        params: list[Any] = [embedding_model, embedding_dimensions]
+        if session_id is not None:
+            query += " AND session_id = ?"
+            params.append(session_id)
+        if kind is not None:
+            query += " AND kind = ?"
+            params.append(kind)
+        rows = conn.execute(query, params).fetchall()
+        return [_row_to_memory(row) for row in rows]
 
     return _pool.execute(db_path, _fetch)
 

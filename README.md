@@ -286,7 +286,7 @@ SQLite store (never a real database) with the default `balanced` ONNX embedding
 model. Reproduce them yourself:
 
 ```bash
-python scripts/benchmark_index_recall_speed.py --json-out speed.json
+python scripts/benchmark_index_recall_speed.py --checkpoints 100 500 2000 5000 10000 20000 --json-out speed.json
 python scripts/benchmark_token_savings.py --json-out savings.json
 python scripts/benchmark_recall_accuracy.py --json-out accuracy.json
 ```
@@ -295,14 +295,22 @@ python scripts/benchmark_recall_accuracy.py --json-out accuracy.json
 
 | Corpus size | Write throughput | Recall p50 | Recall p95 |
 | --- | --- | --- | --- |
-| 100 | 32.0 mem/s | 55.4ms | 131.1ms |
-| 500 | 52.5 mem/s | 27.7ms | 30.2ms |
-| 2,000 | 30.9 mem/s | 113.8ms | 238.0ms |
-| 5,000 | 52.3 mem/s | 146.4ms | 182.6ms |
+| 100 | 170.0 mem/s | 8.9ms | 9.9ms |
+| 500 | 210.3 mem/s | 9.0ms | 10.1ms |
+| 2,000 | 208.2 mem/s | 10.5ms | 12.3ms |
+| 5,000 | 204.3 mem/s | 10.8ms | 12.6ms |
+| 10,000 | 180.5 mem/s | 11.0ms | 12.3ms |
+| 20,000 | 186.5 mem/s | 11.4ms | 12.5ms |
 
-Recall latency trends upward with corpus size — recall scans candidates
-rather than using an ANN index, so it's not flat past a few thousand
-memories. Write throughput holds steady regardless of corpus size.
+Recall stays flat well past a few thousand memories: p95 only grows from
+9.9ms to 12.5ms across a 200x increase in corpus size (100 to 20,000). Each
+retriever (BM25, dense) hands over its own top-scoring candidates rather than
+every stored memory being hydrated and ranked on each call; only that
+bounded, unioned pool is fused and scored. There's still no ANN index
+underneath — SQLite has to evaluate every candidate row to find those
+top-scoring matches, so this is bounded brute force rather than sublinear
+search, and will eventually bend upward again well beyond the sizes tested
+here. Write throughput holds steady regardless of corpus size.
 
 ### Token savings vs. a naive "resend everything" agent
 
@@ -315,10 +323,11 @@ recalls** at $3/MTok input pricing (Claude Sonnet 5).
 Published numbers from [Mem0](https://mem0.ai/research) (~90%+ token
 reduction, ~200ms p95 latency) and [Zep](https://blog.getzep.com/lies-damn-lies-statistics-is-mem0-really-sota-in-agent-memory/)
 (~65–200ms p95 latency) put TinyContext at or ahead on token compaction, and
-competitive on latency at the corpus sizes tested here. That's not an
-apples-to-apples claim, though — those figures come from real conversational
-benchmarks (LoCoMo, LongMemEval) with retrieval-accuracy grading in the loop,
-run at larger scale than tested above.
+ahead on latency at the corpus sizes tested here (single-digit-to-low-teens
+ms p95 vs. 65-200ms). That's not an apples-to-apples claim, though — those
+figures come from real conversational benchmarks (LoCoMo, LongMemEval) with
+retrieval-accuracy grading in the loop, run against hosted vector databases
+at larger scale than tested above.
 
 ### Retrieval accuracy — an open question, not a claim
 

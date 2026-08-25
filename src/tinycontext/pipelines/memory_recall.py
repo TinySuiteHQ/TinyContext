@@ -8,9 +8,11 @@ from tinycontext.errors import SessionNotFoundError
 from tinycontext.models import MemoryRow
 from tinycontext.services.embedding_service import embed_texts, embedding_model_key
 from tinycontext.services.memory_store_service import (
-    fetch_candidates,
+    count_memories,
     fetch_dense_scores,
+    fetch_memories_by_ids,
     fetch_sparse_scores,
+    fetch_stale_memories,
     record_recall_hits,
     session_exists,
     short_memory_ref,
@@ -21,6 +23,17 @@ from tinycontext.services.token_counter_service import token_count
 
 _HIGH_RELEVANCE_THRESHOLD = 0.90
 _MEDIUM_RELEVANCE_THRESHOLD = 0.75
+
+# Bound on how many top-scoring rows each retriever (dense, sparse) hands to
+# fusion, instead of ranking every stored memory in the session/kind scope on
+# every call. RRF only needs relative rank among plausible candidates, so a
+# generous top-N from each side (unioned) reproduces the same fused ordering
+# for anything that would realistically surface, at a fraction of the cost --
+# this is the same pattern hybrid search engines (Elasticsearch, Weaviate)
+# use: rank within each retriever's top-N, not the full corpus.
+_CANDIDATE_POOL_MULTIPLIER = 20
+_CANDIDATE_POOL_FLOOR = 100
+_CANDIDATE_POOL_CAP = 1000
 
 # RRF similarity is rank-relative: it measures how a candidate ranks against
 # the *other* candidates in this pool, not how semantically close it actually
@@ -87,17 +100,18 @@ def memory_recall_run(
     if session_id is not None and not session_exists(db_path, session_id):
         raise SessionNotFoundError(f"session not found: {session_id}")
 
-    candidates = fetch_candidates(db_path, session_id=session_id, kind="episodic")
-    if not candidates:
-        current_time = _utc_now()
-        return {
-            "query": query,
-            "current_time": _iso_utc(current_time),
-            "memories": [],
-            "total_tokens": 0,
-            "truncated": False,
-            "matched_count": 0,
-        }
+    empty_result = {
+        "query": query,
+        "current_time": _iso_utc(_utc_now()),
+        "memories": [],
+        "total_tokens": 0,
+        "truncated": False,
+        "matched_count": 0,
+    }
+
+    total_candidates = count_memories(db_path, session_id=session_id, kind="episodic")
+    if total_candidates == 0:
+        return empty_result
 
     model_key = embedding_model_key(
         embedding_model,
@@ -114,40 +128,52 @@ def memory_recall_run(
         openai_env_file=embedding_openai_env_file,
         batch_size=embedding_batch_size,
     )[0]
-    stale = [
-        row
-        for row in candidates
-        if row.embedding_model != model_key
-        or row.embedding_dimensions != len(query_embedding)
-    ]
-    if stale and not skip_stale_backfill:
-        document_embeddings = embed_texts(
-            [document_prefix + row.content for row in stale],
-            embedding_model=embedding_model,
-            backend=embedding_backend,
-            models_dir=models_dir,
-            openai_env_file=embedding_openai_env_file,
-            batch_size=embedding_batch_size,
-        )
-        update_memory_embeddings(
+    if not skip_stale_backfill:
+        stale = fetch_stale_memories(
             db_path,
-            [
-                (row.id, vector)
-                for row, vector in zip(stale, document_embeddings, strict=True)
-            ],
+            session_id=session_id,
+            kind="episodic",
             embedding_model=model_key,
+            embedding_dimensions=len(query_embedding),
         )
+        if stale:
+            document_embeddings = embed_texts(
+                [document_prefix + row.content for row in stale],
+                embedding_model=embedding_model,
+                backend=embedding_backend,
+                models_dir=models_dir,
+                openai_env_file=embedding_openai_env_file,
+                batch_size=embedding_batch_size,
+            )
+            update_memory_embeddings(
+                db_path,
+                [
+                    (row.id, vector)
+                    for row, vector in zip(stale, document_embeddings, strict=True)
+                ],
+                embedding_model=model_key,
+            )
 
+    pool_size = min(
+        max(top_k * _CANDIDATE_POOL_MULTIPLIER, _CANDIDATE_POOL_FLOOR),
+        _CANDIDATE_POOL_CAP,
+    )
     dense_scores = fetch_dense_scores(
         db_path,
         query_embedding,
         embedding_model=model_key,
         session_id=session_id,
         kind="episodic",
+        limit=pool_size,
     )
     sparse_scores = fetch_sparse_scores(
-        db_path, query, session_id=session_id, kind="episodic"
+        db_path, query, session_id=session_id, kind="episodic", limit=pool_size
     )
+    candidate_ids = set(dense_scores) | set(sparse_scores)
+    if not candidate_ids:
+        return empty_result
+    candidates = fetch_memories_by_ids(db_path, candidate_ids)
+
     bm25_scores = [float(sparse_scores.get(row.id, 0.0)) for row in candidates]
 
     dense_values = [float(dense_scores.get(row.id, 0.0)) for row in candidates]
