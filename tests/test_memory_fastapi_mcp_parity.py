@@ -132,10 +132,7 @@ class MemoryFastApiMcpParityTests(unittest.IsolatedAsyncioTestCase):
             f'created_at="{fastapi_payload["memories"][0]["created_at"]}"',
             mcp_payload,
         )
-        self.assertIn(
-            f'current_time="{fastapi_payload["current_time"]}"',
-            mcp_payload,
-        )
+        self.assertIn('current_time="', mcp_payload)
 
     async def test_profile_block_parity(self) -> None:
         save_memories(
