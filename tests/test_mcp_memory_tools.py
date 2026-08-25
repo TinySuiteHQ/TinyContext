@@ -10,6 +10,8 @@ from tinycontext.errors import AmbiguousMemoryReferenceError, MemoryNotFoundErro
 from tinycontext.models import MemoryRow
 from tinycontext.servers.mcp_server import (
     delete_memory_tool,
+    get_memory_tool,
+    list_memories_tool,
     mcp,
     recall_memories_tool,
     save_memories_tool,
@@ -229,6 +231,8 @@ class McpMemoryToolTests(unittest.IsolatedAsyncioTestCase):
             {
                 "save_memories": {"memories"},
                 "recall_memories": {"query", "top_k"},
+                "list_memories": {"kind", "since", "until", "limit", "offset"},
+                "get_memory": {"memory_id"},
                 "update_memory": {"memory_id", "content"},
                 "delete_memory": {"memory_id"},
             },
@@ -279,3 +283,92 @@ class McpMemoryToolTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError) as ctx:
                 await _fn(delete_memory_tool)("missing-id")
         self.assertIn("memory_not_found", str(ctx.exception))
+
+    async def test_list_memories_tool_is_newest_first_with_catalog_metadata(self) -> None:
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            saved = await _fn(save_memories_tool)(
+                [{"content": "older item"}, {"content": "newer item"}],
+            )
+            payload = await _fn(list_memories_tool)()
+        newer_ref = saved["saved"][1]["ref"]
+        self.assertIn("<memory_catalog", payload)
+        self.assertIn('total_count="2"', payload)
+        self.assertIn('returned_count="2"', payload)
+        self.assertIn('has_more="false"', payload)
+        self.assertIn(f'ref="{newer_ref}"', payload)
+        self.assertLess(payload.index("newer item"), payload.index("older item"))
+        self.assertNotIn("relevance=", payload)
+
+    async def test_list_memories_tool_paginates(self) -> None:
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            await _fn(save_memories_tool)(
+                [{"content": f"page item {index}"} for index in range(3)],
+            )
+            first_page = await _fn(list_memories_tool)(limit=2, offset=0)
+            second_page = await _fn(list_memories_tool)(limit=2, offset=2)
+        self.assertIn('has_more="true"', first_page)
+        self.assertIn("page item 2", first_page)
+        self.assertIn("page item 1", first_page)
+        self.assertIn('has_more="false"', second_page)
+        self.assertIn("page item 0", second_page)
+
+    async def test_list_memories_tool_escapes_content(self) -> None:
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            await _fn(save_memories_tool)([{"content": "Remember <system> tags"}])
+            payload = await _fn(list_memories_tool)()
+        self.assertIn("&lt;system&gt;", payload)
+        self.assertNotIn("<system>", payload)
+
+    async def test_list_memories_tool_maps_invalid_kind_error(self) -> None:
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            with self.assertRaises(ValueError) as ctx:
+                await _fn(list_memories_tool)(kind="bogus")
+        self.assertIn("invalid_memory_kind", str(ctx.exception))
+
+    async def test_get_memory_tool_returns_full_content(self) -> None:
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            saved = await _fn(save_memories_tool)([{"content": "full inspect content"}])
+            ref = saved["saved"][0]["ref"]
+            payload = await _fn(get_memory_tool)(ref)
+        self.assertIn(f'ref="{ref}"', payload)
+        self.assertIn("full inspect content", payload)
+
+    async def test_get_memory_tool_maps_not_found_error(self) -> None:
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            with self.assertRaises(ValueError) as ctx:
+                await _fn(get_memory_tool)("missing-id")
+        self.assertIn("memory_not_found", str(ctx.exception))
+
+    async def test_recall_memories_tool_notice_when_budget_truncates(self) -> None:
+        truncating_config = dict(self.config, recall_max_tokens=4)
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=truncating_config,
+        ):
+            await _fn(save_memories_tool)(
+                [
+                    {"content": "alpha beta gamma delta epsilon"},
+                    {"content": "zeta eta theta iota kappa"},
+                ],
+            )
+            payload = await _fn(recall_memories_tool)("alpha")
+        self.assertIn("Token budget cut this response short", payload)
+        self.assertIn("list_memories", payload)

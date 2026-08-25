@@ -431,17 +431,48 @@ def fetch_candidates(
     return _pool.execute(db_path, _fetch)
 
 
+def _recent_memories_filters(
+    *,
+    session_id: str | None,
+    kind: str | None,
+    since: str | None,
+    until: str | None,
+) -> tuple[str, list[Any]]:
+    clause = " WHERE superseded_by IS NULL"
+    params: list[Any] = []
+    if session_id is not None:
+        clause += " AND session_id = ?"
+        params.append(session_id)
+    if kind is not None:
+        clause += " AND kind = ?"
+        params.append(kind)
+    if since is not None:
+        clause += " AND created_at >= ?"
+        params.append(since)
+    if until is not None:
+        clause += " AND created_at <= ?"
+        params.append(until)
+    return clause, params
+
+
 def fetch_recent_memories(
     db_path: Path,
     *,
     session_id: str | None = None,
     kind: str | None = None,
     limit: int | None = None,
+    offset: int = 0,
+    since: str | None = None,
+    until: str | None = None,
 ) -> list[MemoryRow]:
     """Fetch stored memories newest-first without touching embeddings."""
 
     def _fetch(conn: sqlite3.Connection) -> list[MemoryRow]:
-        query = """
+        clause, params = _recent_memories_filters(
+            session_id=session_id, kind=kind, since=since, until=until
+        )
+        query = (
+            """
         SELECT
           id,
           session_id,
@@ -455,25 +486,43 @@ def fetch_recent_memories(
           recall_count,
           kind
         FROM memories
-        WHERE superseded_by IS NULL
         """
-        params: list[Any] = []
-        if session_id is not None:
-            query += " AND session_id = ?"
-            params.append(session_id)
-        if kind is not None:
-            query += " AND kind = ?"
-            params.append(kind)
-        # rowid makes equal-second and same-batch saves deterministic: the
-        # later inserted row is the newer one when timestamps tie.
-        query += " ORDER BY created_at DESC, rowid DESC"
+            + clause
+            # rowid makes equal-second and same-batch saves deterministic: the
+            # later inserted row is the newer one when timestamps tie.
+            + " ORDER BY created_at DESC, rowid DESC"
+        )
         if limit is not None:
             query += " LIMIT ?"
             params.append(int(limit))
+            query += " OFFSET ?"
+            params.append(int(offset))
         rows = conn.execute(query, params).fetchall()
         return [_row_to_memory(row) for row in rows]
 
     return _pool.execute(db_path, _fetch)
+
+
+def count_memories(
+    db_path: Path,
+    *,
+    session_id: str | None = None,
+    kind: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+) -> int:
+    """Count stored (non-superseded) memories matching the given filters."""
+
+    def _count(conn: sqlite3.Connection) -> int:
+        clause, params = _recent_memories_filters(
+            session_id=session_id, kind=kind, since=since, until=until
+        )
+        row = conn.execute(
+            "SELECT COUNT(*) AS total FROM memories" + clause, params
+        ).fetchone()
+        return int(row["total"])
+
+    return _pool.execute(db_path, _count)
 
 
 def update_memory_embeddings(

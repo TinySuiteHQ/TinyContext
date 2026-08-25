@@ -9,6 +9,8 @@ from unittest.mock import patch
 from tinycontext import (
     MemoryInput,
     delete_memory,
+    get_memory,
+    list_memories,
     recall_memories,
     save_memories,
     update_memory,
@@ -560,3 +562,105 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(memory["scores"]["rrf"], 1.0)
         self.assertEqual(memory["scores"]["dense"], 0.0)
         self.assertEqual(memory["relevance"], "low")
+
+    def test_list_memories_is_newest_first_and_not_semantic(self) -> None:
+        save_memories(
+            [MemoryInput(content="first saved"), MemoryInput(content="second saved")],
+            config=self.config,
+        )
+        payload = list_memories(config=self.config)
+        self.assertEqual(
+            [memory["content"] for memory in payload["memories"]],
+            ["second saved", "first saved"],
+        )
+        self.assertEqual(payload["total_count"], 2)
+        self.assertEqual(payload["returned_count"], 2)
+        self.assertFalse(payload["has_more"])
+
+    def test_list_memories_paginates_with_limit_and_offset(self) -> None:
+        save_memories(
+            [MemoryInput(content=f"item {index}") for index in range(5)],
+            config=self.config,
+        )
+        first_page = list_memories(limit=2, offset=0, config=self.config)
+        second_page = list_memories(limit=2, offset=2, config=self.config)
+        self.assertEqual(
+            [memory["content"] for memory in first_page["memories"]],
+            ["item 4", "item 3"],
+        )
+        self.assertTrue(first_page["has_more"])
+        self.assertEqual(
+            [memory["content"] for memory in second_page["memories"]],
+            ["item 2", "item 1"],
+        )
+        self.assertTrue(second_page["has_more"])
+        self.assertEqual(first_page["total_count"], 5)
+        self.assertEqual([m["rank"] for m in second_page["memories"]], [3, 4])
+
+    def test_list_memories_filters_by_date_range(self) -> None:
+        db_path = Path(self.config["memory_db_path"])
+        insert_memories(
+            db_path,
+            [
+                MemoryRow(
+                    id="aaaaaaaaaaaa0001",
+                    session_id=None,
+                    content="old memory",
+                    created_at="2026-08-01T00:00:00Z",
+                ),
+                MemoryRow(
+                    id="aaaaaaaaaaaa0002",
+                    session_id=None,
+                    content="recent memory",
+                    created_at="2026-08-20T00:00:00Z",
+                ),
+            ],
+        )
+        payload = list_memories(
+            since="2026-08-10T00:00:00Z", config=self.config
+        )
+        self.assertEqual(
+            [memory["content"] for memory in payload["memories"]], ["recent memory"]
+        )
+        self.assertEqual(payload["total_count"], 1)
+
+    def test_list_memories_truncates_long_content_preview(self) -> None:
+        long_content = "x" * 500
+        save_memories([MemoryInput(content=long_content)], config=self.config)
+        payload = list_memories(config=self.config)
+        memory = payload["memories"][0]
+        self.assertTrue(memory["preview_truncated"])
+        self.assertLess(len(memory["content"]), len(long_content))
+        self.assertGreater(memory["content_tokens"], 0)
+
+    def test_list_memories_kind_filter(self) -> None:
+        save_memories(
+            [MemoryInput(content="profile fact", kind="profile")], config=self.config
+        )
+        save_memories([MemoryInput(content="episodic fact")], config=self.config)
+        payload = list_memories(kind="profile", config=self.config)
+        self.assertEqual(
+            [memory["content"] for memory in payload["memories"]], ["profile fact"]
+        )
+
+    def test_list_memories_rejects_invalid_kind(self) -> None:
+        with self.assertRaises(InvalidMemoryKindError):
+            list_memories(kind="bogus", config=self.config)
+
+    def test_list_memories_validates_limit_and_offset(self) -> None:
+        with self.assertRaises(RecallBudgetError):
+            list_memories(limit=0, config=self.config)
+        with self.assertRaises(RecallBudgetError):
+            list_memories(offset=-1, config=self.config)
+
+    def test_get_memory_returns_full_content_by_ref(self) -> None:
+        saved = save_memories([MemoryInput(content="full detail")], config=self.config)
+        ref = saved["saved"][0]["ref"]
+        payload = get_memory(ref, config=self.config)
+        self.assertEqual(payload["content"], "full detail")
+        self.assertEqual(payload["id"], saved["saved"][0]["id"])
+        self.assertEqual(payload["recall_count"], 0)
+
+    def test_get_memory_missing_raises(self) -> None:
+        with self.assertRaises(MemoryNotFoundError):
+            get_memory("missing-id", config=self.config)

@@ -96,6 +96,7 @@ def memory_recall_run(
             "memories": [],
             "total_tokens": 0,
             "truncated": False,
+            "matched_count": 0,
         }
 
     model_key = embedding_model_key(
@@ -229,6 +230,7 @@ def memory_recall_run(
         "memories": selected,
         "total_tokens": total_tokens,
         "truncated": truncated,
+        "matched_count": len(ranked),
     }
 
 

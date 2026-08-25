@@ -7,15 +7,21 @@ from unittest.mock import patch
 
 from tinycontext import MemoryInput, save_memories
 from tinycontext.servers.fastapi_server import (
+    GetMemoryRequest,
+    ListMemoriesRequest,
     MemoryInputModel,
     RecallMemoriesRequest,
     SaveMemoriesRequest,
     UpdateMemoryRequest,
+    get_memory_endpoint,
+    list_memories_endpoint,
     recall_memories_endpoint,
     save_memories_endpoint,
     update_memory_endpoint,
 )
 from tinycontext.servers.mcp_server import (
+    get_memory_tool,
+    list_memories_tool,
     recall_memories_tool,
     save_memories_tool,
     update_memory_tool,
@@ -183,3 +189,57 @@ class MemoryFastApiMcpParityTests(unittest.IsolatedAsyncioTestCase):
             mcp_payload.index("first recent"),
         )
         self.assertIn('<recalled_memories mode="recent"', mcp_payload)
+
+    async def test_list_memories_parity(self) -> None:
+        save_memories(
+            [MemoryInput(content="list parity older"), MemoryInput(content="list parity newer")],
+            config=self.config,
+        )
+        with patch(
+            "tinycontext.servers.fastapi_server.load_context_config",
+            return_value=self.config,
+        ):
+            fastapi_payload = await list_memories_endpoint(ListMemoriesRequest())
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            mcp_payload = await _fn(list_memories_tool)()
+        self.assertEqual(
+            [memory["content"] for memory in fastapi_payload["memories"]],
+            ["list parity newer", "list parity older"],
+        )
+        self.assertIn("list parity newer", mcp_payload)
+        self.assertIn("list parity older", mcp_payload)
+        self.assertIn(f'total_count="{fastapi_payload["total_count"]}"', mcp_payload)
+        self.assertLess(
+            mcp_payload.index("list parity newer"),
+            mcp_payload.index("list parity older"),
+        )
+
+    async def test_get_memory_parity(self) -> None:
+        # Distinct semantic groups per adapter so save-time dedup doesn't skip
+        # the second call -- this test checks response-shape parity, not dedup.
+        with patch(
+            "tinycontext.servers.fastapi_server.load_context_config",
+            return_value=self.config,
+        ):
+            fastapi_saved = await save_memories_endpoint(
+                SaveMemoriesRequest(
+                    memories=[MemoryInputModel(content="database storage state notes")],
+                )
+            )
+            fastapi_payload = await get_memory_endpoint(
+                GetMemoryRequest(memory_id=fastapi_saved["saved"][0]["ref"])
+            )
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            mcp_saved = await _fn(save_memories_tool)(
+                [{"content": "python backend framework notes"}]
+            )
+            mcp_payload = await _fn(get_memory_tool)(mcp_saved["saved"][0]["ref"])
+        self.assertEqual(fastapi_payload["content"], "database storage state notes")
+        self.assertIn("python backend framework notes", mcp_payload)
+        self.assertIn(f'ref="{mcp_saved["saved"][0]["ref"]}"', mcp_payload)

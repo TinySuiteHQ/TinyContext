@@ -72,6 +72,19 @@ class RecallMemoriesRequest(BaseModel):
     top_k: int | None = Field(default=None, ge=1)
 
 
+class ListMemoriesRequest(BaseModel):
+    session_id: str | None = None
+    kind: str | None = None
+    since: str | None = None
+    until: str | None = None
+    limit: int | None = Field(default=None, ge=1)
+    offset: int = Field(default=0, ge=0)
+
+
+class GetMemoryRequest(BaseModel):
+    memory_id: str = Field(..., min_length=1)
+
+
 class DeleteMemoryRequest(BaseModel):
     memory_id: str = Field(..., min_length=1)
 
@@ -160,6 +173,58 @@ async def recall_memories_get(
             top_k=top_k,
         )
     )
+
+
+@app.post("/list_memories")
+async def list_memories_endpoint(request: ListMemoriesRequest) -> dict[str, Any]:
+    config = tenant_config(load_context_config())
+    try:
+        return core.list_memories(
+            session_id=request.session_id,
+            kind=request.kind,
+            since=request.since,
+            until=request.until,
+            limit=request.limit,
+            offset=request.offset,
+            config=config,
+        )
+    except MemoryError as exc:
+        _raise_memory_http_error(exc)
+
+
+@app.get("/list_memories")
+async def list_memories_get(
+    session_id: str | None = None,
+    kind: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    limit: int | None = Query(default=None, ge=1),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    return await list_memories_endpoint(
+        ListMemoriesRequest(
+            session_id=session_id,
+            kind=kind,
+            since=since,
+            until=until,
+            limit=limit,
+            offset=offset,
+        )
+    )
+
+
+@app.post("/get_memory")
+async def get_memory_endpoint(request: GetMemoryRequest) -> dict[str, Any]:
+    config = tenant_config(load_context_config())
+    try:
+        return core.get_memory(request.memory_id, config=config)
+    except MemoryError as exc:
+        _raise_memory_http_error(exc)
+
+
+@app.get("/get_memory")
+async def get_memory_get(memory_id: str) -> dict[str, Any]:
+    return await get_memory_endpoint(GetMemoryRequest(memory_id=memory_id))
 
 
 @app.post("/delete_memory")

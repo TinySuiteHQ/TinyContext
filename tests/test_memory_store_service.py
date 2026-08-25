@@ -10,6 +10,7 @@ from tinycontext.services import memory_store_service
 from tinycontext.services.memory_store_service import (
     clear_superseded_by,
     close_connection,
+    count_memories,
     delete_memory,
     embedding_storage_stats,
     fetch_candidates,
@@ -139,6 +140,93 @@ class MemoryStoreServiceTests(unittest.TestCase):
         )
         rows = fetch_recent_memories(self.db_path, session_id="s1", limit=2)
         self.assertEqual([row.id for row in rows], ["second", "first"])
+
+    def test_fetch_recent_supports_offset_for_pagination(self) -> None:
+        insert_memories(
+            self.db_path,
+            [
+                MemoryRow(
+                    id=str(index),
+                    session_id="s1",
+                    content=str(index),
+                    created_at=f"2026-06-30T10:0{index}:00Z",
+                )
+                for index in range(4)
+            ],
+        )
+        first_page = fetch_recent_memories(self.db_path, limit=2, offset=0)
+        second_page = fetch_recent_memories(self.db_path, limit=2, offset=2)
+        self.assertEqual([row.id for row in first_page], ["3", "2"])
+        self.assertEqual([row.id for row in second_page], ["1", "0"])
+
+    def test_fetch_recent_filters_by_since_and_until(self) -> None:
+        insert_memories(
+            self.db_path,
+            [
+                MemoryRow(
+                    id="old",
+                    session_id=None,
+                    content="old",
+                    created_at="2026-08-01T00:00:00Z",
+                ),
+                MemoryRow(
+                    id="mid",
+                    session_id=None,
+                    content="mid",
+                    created_at="2026-08-10T00:00:00Z",
+                ),
+                MemoryRow(
+                    id="new",
+                    session_id=None,
+                    content="new",
+                    created_at="2026-08-20T00:00:00Z",
+                ),
+            ],
+        )
+        self.assertEqual(
+            [row.id for row in fetch_recent_memories(self.db_path, since="2026-08-05T00:00:00Z")],
+            ["new", "mid"],
+        )
+        self.assertEqual(
+            [row.id for row in fetch_recent_memories(self.db_path, until="2026-08-05T00:00:00Z")],
+            ["old"],
+        )
+        self.assertEqual(
+            [
+                row.id
+                for row in fetch_recent_memories(
+                    self.db_path,
+                    since="2026-08-05T00:00:00Z",
+                    until="2026-08-15T00:00:00Z",
+                )
+            ],
+            ["mid"],
+        )
+
+    def test_count_memories_matches_filters(self) -> None:
+        insert_memories(
+            self.db_path,
+            [
+                MemoryRow(
+                    id="m1",
+                    session_id="s1",
+                    content="one",
+                    created_at="2026-06-30T10:00:00Z",
+                    kind="episodic",
+                ),
+                MemoryRow(
+                    id="m2",
+                    session_id=None,
+                    content="two",
+                    created_at="2026-06-30T10:01:00Z",
+                    kind="profile",
+                ),
+            ],
+        )
+        self.assertEqual(count_memories(self.db_path), 2)
+        self.assertEqual(count_memories(self.db_path, kind="episodic"), 1)
+        self.assertEqual(count_memories(self.db_path, session_id="s1"), 1)
+        self.assertEqual(count_memories(self.db_path, since="2026-07-01T00:00:00Z"), 0)
 
     def test_session_exists(self) -> None:
         self.assertFalse(session_exists(self.db_path, "missing"))

@@ -26,6 +26,7 @@ from tinycontext.services.embedding_reindex_service import (
 from tinycontext.services.embedding_service import embed_texts, embedding_model_key
 from tinycontext.services.memory_store_service import (
     clear_superseded_by,
+    count_memories,
     delete_memory as _delete_memory_row,
     embedding_model_mismatch_count,
     embedding_storage_stats,
@@ -297,6 +298,7 @@ def _recall_recent_memories(
         "memories": selected,
         "total_tokens": total_tokens,
         "truncated": truncated,
+        "matched_count": len(rows),
     }
 
 
@@ -416,6 +418,118 @@ def delete_memory(
         raise MemoryNotFoundError(f"no memory found with id {memory_id!r}")
     clear_superseded_by(db_path, resolved_id)
     return {"id": resolved_id, "ref": short_memory_ref(resolved_id), "deleted": True}
+
+
+_LIST_DEFAULT_LIMIT = 20
+_LIST_MAX_LIMIT = 200
+_LIST_PREVIEW_CHARS = 200
+
+
+def get_memory(memory_id: str, *, config: ConfigInput | None = None) -> dict[str, Any]:
+    """Fetch a single memory's full content by ref or id, bypassing recall/ranking."""
+    memory_id = memory_id.strip()
+    if not memory_id:
+        raise EmptyMemoryError("memory_id must not be empty")
+
+    resolved = _resolved_values(config)
+    db_path = Path(str(resolved["memory_db_path"]))
+    encoding_name = str(resolved["encoding_name"])
+
+    resolved_id = _resolve_memory_id(db_path, memory_id)
+    row = fetch_memory_by_id(db_path, resolved_id)
+    if row is None:
+        raise MemoryNotFoundError(f"no memory found with id {memory_id!r}")
+
+    return {
+        "id": row.id,
+        "ref": short_memory_ref(row.id),
+        "session_id": row.session_id,
+        "kind": row.kind,
+        "content": row.content,
+        "content_tokens": token_count(row.content, encoding_name),
+        "created_at": row.created_at,
+        "superseded_by": short_memory_ref(row.superseded_by)
+        if row.superseded_by
+        else None,
+        "superseded_at": row.superseded_at,
+        "last_recalled_at": row.last_recalled_at,
+        "recall_count": row.recall_count,
+    }
+
+
+def list_memories(
+    *,
+    session_id: str | None = None,
+    kind: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
+    config: ConfigInput | None = None,
+) -> dict[str, Any]:
+    """Browse stored memories newest-first: a cheap, deterministic catalog view.
+
+    Unlike ``recall_memories`` this does no embedding calls, no ranking, and
+    no token-budget cutoff -- it's meant for paging through what's stored
+    (optionally scoped to a date range) rather than finding what's relevant
+    to a query. Content is truncated to a short preview per entry; use
+    ``get_memory`` to read one entry in full.
+    """
+    if limit is not None and limit < 1:
+        raise RecallBudgetError("limit must be at least 1")
+    if offset < 0:
+        raise RecallBudgetError("offset must be at least 0")
+    if kind is not None and kind not in MEMORY_KINDS:
+        raise InvalidMemoryKindError(
+            f"kind must be one of {sorted(MEMORY_KINDS)}, got {kind!r}"
+        )
+
+    resolved = _resolved_values(config)
+    db_path = Path(str(resolved["memory_db_path"]))
+    encoding_name = str(resolved["encoding_name"])
+    resolved_limit = min(limit or _LIST_DEFAULT_LIMIT, _LIST_MAX_LIMIT)
+
+    rows = fetch_recent_memories(
+        db_path,
+        session_id=session_id,
+        kind=kind,
+        limit=resolved_limit,
+        offset=offset,
+        since=since,
+        until=until,
+    )
+    total_count = count_memories(
+        db_path, session_id=session_id, kind=kind, since=since, until=until
+    )
+
+    memories: list[dict[str, Any]] = []
+    for index, row in enumerate(rows, start=1):
+        content_tokens = token_count(row.content, encoding_name)
+        preview_truncated = len(row.content) > _LIST_PREVIEW_CHARS
+        content = row.content[:_LIST_PREVIEW_CHARS] + "…" if preview_truncated else row.content
+        memories.append(
+            {
+                "id": row.id,
+                "ref": short_memory_ref(row.id),
+                "session_id": row.session_id,
+                "kind": row.kind,
+                "content": content,
+                "content_tokens": content_tokens,
+                "preview_truncated": preview_truncated,
+                "created_at": row.created_at,
+                "rank": offset + index,
+            }
+        )
+
+    return {
+        "current_time": _utc_now_iso(),
+        "memories": memories,
+        "returned_count": len(memories),
+        "total_count": total_count,
+        "limit": resolved_limit,
+        "offset": offset,
+        "has_more": offset + len(memories) < total_count,
+    }
 
 
 def start_background_reembed_if_needed(config: ConfigInput | None = None) -> str | None:

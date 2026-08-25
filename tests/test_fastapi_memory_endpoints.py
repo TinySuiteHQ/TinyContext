@@ -10,11 +10,15 @@ from fastapi import HTTPException
 
 from tinycontext.servers.fastapi_server import (
     DeleteMemoryRequest,
+    GetMemoryRequest,
+    ListMemoriesRequest,
     MemoryInputModel,
     RecallMemoriesRequest,
     SaveMemoriesRequest,
     UpdateMemoryRequest,
     delete_memory_endpoint,
+    get_memory_endpoint,
+    list_memories_endpoint,
     recall_memories_endpoint,
     save_memories_endpoint,
     update_memory_endpoint,
@@ -211,6 +215,71 @@ class FastApiMemoryEndpointTests(unittest.IsolatedAsyncioTestCase):
         detail = ctx.exception.detail
         assert isinstance(detail, dict)
         self.assertEqual(detail["code"], "memory_not_found")
+
+    async def test_list_memories_endpoint_paginates_newest_first(self) -> None:
+        with patch(
+            "tinycontext.servers.fastapi_server.load_context_config",
+            return_value=self.config,
+        ):
+            await save_memories_endpoint(
+                SaveMemoriesRequest(
+                    memories=[
+                        MemoryInputModel(content=f"listed {index}") for index in range(3)
+                    ],
+                )
+            )
+            first_page = await list_memories_endpoint(ListMemoriesRequest(limit=2))
+            second_page = await list_memories_endpoint(
+                ListMemoriesRequest(limit=2, offset=2)
+            )
+        self.assertEqual(
+            [memory["content"] for memory in first_page["memories"]],
+            ["listed 2", "listed 1"],
+        )
+        self.assertTrue(first_page["has_more"])
+        self.assertEqual(
+            [memory["content"] for memory in second_page["memories"]], ["listed 0"]
+        )
+        self.assertFalse(second_page["has_more"])
+        self.assertEqual(first_page["total_count"], 3)
+
+    async def test_list_memories_endpoint_filters_by_since_until(self) -> None:
+        transport = httpx.ASGITransport(app=app)
+        with patch(
+            "tinycontext.servers.fastapi_server.load_context_config",
+            return_value=self.config,
+        ):
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                response = await client.get(
+                    "/list_memories", params={"since": "2099-01-01T00:00:00Z"}
+                )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["memories"], [])
+
+    async def test_get_memory_endpoint_returns_full_content(self) -> None:
+        with patch(
+            "tinycontext.servers.fastapi_server.load_context_config",
+            return_value=self.config,
+        ):
+            saved = await save_memories_endpoint(
+                SaveMemoriesRequest(
+                    memories=[MemoryInputModel(content="inspect this fully")],
+                )
+            )
+            payload = await get_memory_endpoint(
+                GetMemoryRequest(memory_id=saved["saved"][0]["ref"])
+            )
+        self.assertEqual(payload["content"], "inspect this fully")
+        self.assertEqual(payload["id"], saved["saved"][0]["id"])
+
+    async def test_get_memory_endpoint_maps_not_found_error(self) -> None:
+        with patch(
+            "tinycontext.servers.fastapi_server.load_context_config",
+            return_value=self.config,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                await get_memory_endpoint(GetMemoryRequest(memory_id="missing-id"))
+        self.assertEqual(ctx.exception.status_code, 404)
 
     async def test_save_memories_maps_empty_memory_error(self) -> None:
         with patch(

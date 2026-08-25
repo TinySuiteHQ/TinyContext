@@ -49,6 +49,8 @@ class MemoryRecallPipelineTests(unittest.TestCase):
         )
         self.assertTrue(payload["truncated"])
         self.assertLessEqual(payload["total_tokens"], 8)
+        self.assertEqual(payload["matched_count"], 2)
+        self.assertLess(len(payload["memories"]), payload["matched_count"])
 
     def test_pipeline_returns_empty_when_no_memories(self) -> None:
         payload = memory_recall_run(
@@ -61,6 +63,7 @@ class MemoryRecallPipelineTests(unittest.TestCase):
         )
         self.assertEqual(payload["memories"], [])
         self.assertEqual(payload["total_tokens"], 0)
+        self.assertEqual(payload["matched_count"], 0)
 
     def test_pipeline_backfills_embeddings_for_legacy_rows(self) -> None:
         insert_memories(

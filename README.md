@@ -62,18 +62,23 @@ Check the resolved configuration and storage readiness with:
 uvx --python 3.12 --from "tinysuite-context[server]" tinycontext doctor
 ```
 
-TinyContext exposes four tools:
+TinyContext exposes six tools:
 
 ```text
 save_memories(memories)
 recall_memories(query=None, top_k=None)
+list_memories(kind=None, since=None, until=None, limit=None, offset=0)
+get_memory(memory_id)
+update_memory(memory_id, content)
 delete_memory(memory_id)
 ```
 
 - Use `save_memories` for durable facts, preferences, decisions, and research notes. Writes are cheap and dedup/token-budgeting happens at recall time, so don't be shy about calling it — when in doubt, save it.
 - Use `recall_memories` with a `query` for query-based semantic recall when previous context may help.
 - Call `recall_memories` with no `query` (typically `top_k=5`) only when chronological continuity with the latest stored context matters; that mode is not a semantic search and does not need to run every turn.
-- Use `delete_memory` to forget or correct a previously saved memory (find its `ref` via `recall_memories` first).
+- Use `list_memories` to browse the store newest-first, with pagination (`limit`/`offset`) and an optional `since`/`until` date range on `created_at`. It does no embedding calls, no ranking, and no token-budget cutoff, so it's the answer to "what's actually in there" and "what did we do last week" — ground on `current_time` from a recent recall/list response, compute the range, and page with `offset` until `has_more` is false. It's also how to see the rest of a `recall_memories` response that a token budget cut short (that response's `<notice>` says so, alongside `matched_count`).
+- Use `get_memory` to read one memory's full content by `ref`/id, bypassing ranking — e.g. after `list_memories` shows a truncated preview.
+- Use `delete_memory` to forget or correct a previously saved memory (find its `ref` via `recall_memories` or `list_memories` first).
 
 Each memory saved via `save_memories` can set `kind` to `"episodic"` (default)
 or `"profile"`. Profile memories are for durable identity/preference facts —
@@ -339,6 +344,9 @@ The optional HTTP API mirrors the MCP tools.
 | GET | `/health` | Liveness |
 | POST/GET | `/save_memories` | Persist one or more memories |
 | POST/GET | `/recall_memories` | Recall memories within a token budget: semantically ranked with a `query`, or newest-first without one |
+| POST/GET | `/list_memories` | Browse memories newest-first with pagination and an optional `since`/`until` date range; no ranking, no token-budget cutoff |
+| POST/GET | `/get_memory` | Fetch one memory's full content by id/ref |
+| POST | `/update_memory` | Supersede a memory with corrected content |
 | POST | `/delete_memory` | Delete a single memory by id |
 
 Install and run it directly:
@@ -399,6 +407,35 @@ mode:
 This also accepts `GET /recall_memories?session_id=optional-session&top_k=5`.
 The response uses `mode: "recent"` and contains only durable memory fields,
 recency ranks, timestamps, token counts, and the configured token-budget result.
+
+### List request
+
+```json
+{
+  "since": "2026-08-18T00:00:00Z",
+  "until": "2026-08-25T00:00:00Z",
+  "limit": 20,
+  "offset": 0
+}
+```
+
+`limit` defaults to 20 (capped at 200). The response is newest-first and
+includes `total_count`, `returned_count`, and `has_more` for pagination, plus
+a `preview_truncated` flag per entry (content is truncated to a short
+preview; fetch the rest with `/get_memory`). This also accepts
+`GET /list_memories?since=...&until=...&limit=...&offset=...`.
+
+### Get request
+
+```json
+{
+  "memory_id": "fee1180f1c8f"
+}
+```
+
+Also accepts `GET /get_memory?memory_id=fee1180f1c8f`. Returns the memory's
+full, untruncated content plus its lifecycle fields (`recall_count`,
+`last_recalled_at`, `superseded_by`).
 
 ### Error codes
 
@@ -499,7 +536,7 @@ uvicorn servers.fastapi_server:app --host 0.0.0.0 --port 8000
 
 ## Entrypoints
 
-- `tinycontext.save_memories`, `tinycontext.recall_memories`, and `tinycontext.delete_memory`: Python API
+- `tinycontext.save_memories`, `tinycontext.recall_memories`, `tinycontext.list_memories`, `tinycontext.get_memory`, `tinycontext.update_memory`, and `tinycontext.delete_memory`: Python API
 - `tinycontext` / `tinycontext mcp`: stdio MCP
 - `tinycontext serve`: Streamable HTTP MCP
 - `tinycontext doctor`: configuration and storage readiness
