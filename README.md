@@ -282,7 +282,7 @@ migration command or separate vector service is required.
 
 Numbers below come from `scripts/benchmark_index_recall_speed.py` and
 `scripts/benchmark_token_savings.py`, run against an isolated, throwaway
-SQLite store (never a real database) with the default `fast` ONNX embedding
+SQLite store (never a real database) with the default `balanced` ONNX embedding
 model. Reproduce them yourself:
 
 ```bash
@@ -459,13 +459,19 @@ The core defaults are:
 | `profile_max_tokens` | `500` | Token budget for the always-attached profile block |
 | `encoding_name` | `o200k_base` | Tokenizer used for budgeting |
 | `models_dir` | Per-user TinyContext data directory | Downloaded ONNX bundles |
-| `embedding_model` | `fast` | `fast`, `balanced`, `quality`, or a Hugging Face repository |
+| `embedding_model` | `balanced` | `fast`, `balanced`, `quality`, or a Hugging Face repository |
+| `embedding_backend` | `onnx` | `onnx` (local) or `openai_compatible` |
+| `embedding_openai_env_file` | `.env` | Env file to read API credentials from for the openai_compatible backend |
 | `embedding_batch_size` | `32` | Local ONNX inference batch size |
 | `recall_rrf_cutoff` | `0.0` | Minimum normalized hybrid RRF score; zero disables filtering |
 | `recall_dense_weight` | `0.5` | Dense contribution to weighted RRF |
 | `recall_rrf_k` | `60` | RRF rank constant |
+| `recall_access_weight` | `0.0` | Recall-frequency contribution to weighted RRF |
 | `dense_query_prefix` | empty | Optional text prepended before embedding queries |
 | `dense_document_prefix` | empty | Optional text prepended before embedding memories |
+| `dedup_similarity_threshold` | `0.95` | Cosine similarity at/above which a new save is skipped as a duplicate |
+| `dedup_review_similarity_threshold` | `0.80` | Cosine similarity at/above which a saved memory gets a `similar_to` notice instead of being skipped |
+| `save_length_notice_tokens` | `800` | Content length above which a saved memory gets a "consider splitting" notice |
 
 Server processes look for `context_config.json` in the per-user TinyContext
 configuration directory. A relative `memory_db_path` inside a JSON config is

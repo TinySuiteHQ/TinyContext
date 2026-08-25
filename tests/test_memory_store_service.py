@@ -203,6 +203,41 @@ class MemoryStoreServiceTests(unittest.TestCase):
             ["mid"],
         )
 
+    def test_fetch_recent_stale_sort_surfaces_least_recalled_oldest_first(self) -> None:
+        insert_memories(
+            self.db_path,
+            [
+                MemoryRow(
+                    id="old-cold",
+                    session_id=None,
+                    content="old cold",
+                    created_at="2026-08-01T00:00:00Z",
+                ),
+                MemoryRow(
+                    id="new-cold",
+                    session_id=None,
+                    content="new cold",
+                    created_at="2026-08-20T00:00:00Z",
+                ),
+            ],
+        )
+        record_recall_hits(self.db_path, ["new-cold"], "2026-08-21T00:00:00Z")
+        insert_memories(
+            self.db_path,
+            [
+                MemoryRow(
+                    id="never-newest",
+                    session_id=None,
+                    content="never newest",
+                    created_at="2026-08-22T00:00:00Z",
+                ),
+            ],
+        )
+        rows = fetch_recent_memories(self.db_path, order_by="stale")
+        self.assertEqual(
+            [row.id for row in rows], ["old-cold", "never-newest", "new-cold"]
+        )
+
     def test_count_memories_matches_filters(self) -> None:
         insert_memories(
             self.db_path,

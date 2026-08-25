@@ -455,6 +455,17 @@ def _recent_memories_filters(
     return clause, params
 
 
+_ORDER_CLAUSES = {
+    # rowid makes equal-second and same-batch saves deterministic: the later
+    # inserted row is the newer one when timestamps tie.
+    "recent": " ORDER BY created_at DESC, rowid DESC",
+    # Never-recalled rows (recall_count 0, last_recalled_at NULL) sort first
+    # since SQLite orders NULL before any value in ASC order; among those,
+    # the oldest surfaces first as the strongest prune/consolidate candidate.
+    "stale": " ORDER BY recall_count ASC, last_recalled_at ASC, created_at ASC, rowid ASC",
+}
+
+
 def fetch_recent_memories(
     db_path: Path,
     *,
@@ -464,8 +475,14 @@ def fetch_recent_memories(
     offset: int = 0,
     since: str | None = None,
     until: str | None = None,
+    order_by: str = "recent",
 ) -> list[MemoryRow]:
-    """Fetch stored memories newest-first without touching embeddings."""
+    """Fetch stored memories without touching embeddings.
+
+    ``order_by="recent"`` (default) is newest-first. ``order_by="stale"``
+    surfaces the least-recalled, oldest memories first -- candidates for
+    review, consolidation, or deletion.
+    """
 
     def _fetch(conn: sqlite3.Connection) -> list[MemoryRow]:
         clause, params = _recent_memories_filters(
@@ -488,9 +505,7 @@ def fetch_recent_memories(
         FROM memories
         """
             + clause
-            # rowid makes equal-second and same-batch saves deterministic: the
-            # later inserted row is the newer one when timestamps tie.
-            + " ORDER BY created_at DESC, rowid DESC"
+            + _ORDER_CLAUSES[order_by]
         )
         if limit is not None:
             query += " LIMIT ?"

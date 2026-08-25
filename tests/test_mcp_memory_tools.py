@@ -205,7 +205,7 @@ class McpMemoryToolTests(unittest.IsolatedAsyncioTestCase):
             release.wait(timeout=5)
             return fake_embed_texts(inputs)
 
-        changed_config = dict(self.config, embedding_model="balanced")
+        changed_config = dict(self.config, embedding_model="fast")
         with (
             patch(
                 "tinycontext.servers.mcp_server.load_context_config",
@@ -231,7 +231,7 @@ class McpMemoryToolTests(unittest.IsolatedAsyncioTestCase):
             {
                 "save_memories": {"memories"},
                 "recall_memories": {"query", "top_k"},
-                "list_memories": {"kind", "since", "until", "limit", "offset"},
+                "list_memories": {"kind", "since", "until", "limit", "offset", "sort"},
                 "get_memory": {"memory_id"},
                 "update_memory": {"memory_id", "content"},
                 "delete_memory": {"memory_id"},
@@ -301,6 +301,43 @@ class McpMemoryToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(f'ref="{newer_ref}"', payload)
         self.assertLess(payload.index("newer item"), payload.index("older item"))
         self.assertNotIn("relevance=", payload)
+
+    async def test_list_memories_tool_reports_recall_stats(self) -> None:
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            await _fn(save_memories_tool)([{"content": "never recalled"}])
+            payload = await _fn(list_memories_tool)()
+        self.assertIn('recall_count="0"', payload)
+        self.assertIn('last_recalled_at=""', payload)
+
+    async def test_list_memories_tool_stale_sort_surfaces_cold_memories_first(self) -> None:
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            # Distinct fake-embedding semantic groups (database/storage vs.
+            # python/backend) so save-time dedup doesn't treat these as
+            # near-duplicates of each other.
+            await _fn(save_memories_tool)([{"content": "database storage notes"}])
+            await _fn(recall_memories_tool)("database storage notes")
+            await _fn(save_memories_tool)([{"content": "python backend framework"}])
+            payload = await _fn(list_memories_tool)(sort="stale")
+        self.assertIn('sort="stale"', payload)
+        self.assertLess(
+            payload.index("python backend framework"),
+            payload.index("database storage notes"),
+        )
+
+    async def test_list_memories_tool_maps_invalid_sort_error(self) -> None:
+        with patch(
+            "tinycontext.servers.mcp_server.load_context_config",
+            return_value=self.config,
+        ):
+            with self.assertRaises(ValueError) as ctx:
+                await _fn(list_memories_tool)(sort="bogus")
+        self.assertIn("invalid_sort", str(ctx.exception))
 
     async def test_list_memories_tool_paginates(self) -> None:
         with patch(

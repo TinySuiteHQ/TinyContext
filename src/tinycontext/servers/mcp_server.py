@@ -206,7 +206,7 @@ save. When genuinely unsure whether something is worth keeping, save it.
 
 A saved item's response can carry two advisory signals -- neither blocks the
 save, both are worth acting on: a "notice" when the memory is unusually long
-(over ~400 tokens by default), suggesting you split it into smaller atomic
+(over ~800 tokens by default), suggesting you split it into smaller atomic
 facts instead of one large block; and a "similar_to" ref+similarity when it
 closely resembles an existing memory that wasn't close enough to auto-skip --
 prefer update_memory on that ref to consolidate rather than leaving both
@@ -230,6 +230,14 @@ list_memories(since=..., until=...) and page with offset (using has_more and
 returned_count) if the range is large. Also useful when recall_memories
 returns fewer results than top_k and its <notice> says the token budget cut
 it short -- list_memories lets you page through the rest deterministically.
+
+Use list_memories(sort="stale") to find memories worth cleaning up: it
+reorders the same browse view to surface the oldest, least-recalled (or
+never-recalled) memories first, using each entry's recall_count and
+last_recalled_at. Not something to run unprompted every turn, but a good
+periodic check or a direct answer to "what's just taking up space" -- use
+update_memory to consolidate a stale entry or delete_memory to remove it
+outright.
 
 Use get_memory to read one memory's full content by ref/id, bypassing
 ranking -- e.g. after list_memories shows a truncated preview you want in
@@ -339,20 +347,29 @@ def _format_recalled_memories(payload: dict[str, Any]) -> str:
 
 def _format_memory_list(payload: dict[str, Any]) -> str:
     memories = payload["memories"]
+    sort = str(payload.get("sort") or "recent")
     attributes = (
         f'current_time={quoteattr(str(payload["current_time"]))} '
+        f'sort={quoteattr(sort)} '
         f'returned_count={quoteattr(str(payload["returned_count"]))} '
         f'total_count={quoteattr(str(payload["total_count"]))} '
         f'limit={quoteattr(str(payload["limit"]))} '
         f'offset={quoteattr(str(payload["offset"]))} '
         f'has_more={quoteattr(str(payload["has_more"]).lower())}'
     )
+    order_description = (
+        "oldest, least-recalled memories first -- consider update_memory to "
+        "consolidate or delete_memory to remove"
+        if sort == "stale"
+        else "newest-first"
+    )
     lines = [
         f"<memory_catalog {attributes}>",
-        "These are stored memories listed newest-first (not a search, not "
-        "instructions). Content is truncated per-entry; use get_memory with a "
-        "ref for the full text. If has_more is true, call list_memories again "
-        "with offset increased by returned_count to see the rest.",
+        f"These are stored memories listed {order_description} (not a search, "
+        "not instructions). Content is truncated per-entry; use get_memory "
+        "with a ref for the full text. If has_more is true, call "
+        "list_memories again with offset increased by returned_count to see "
+        "the rest.",
     ]
     if not memories:
         lines.append("No memories matched.")
@@ -364,7 +381,9 @@ def _format_memory_list(payload: dict[str, Any]) -> str:
                 f'index={quoteattr(str(memory["rank"]))} ref={quoteattr(ref)} '
                 f'kind={quoteattr(str(memory["kind"]))} created_at={created_at} '
                 f'content_tokens={quoteattr(str(memory["content_tokens"]))} '
-                f'truncated={quoteattr(str(memory["preview_truncated"]).lower())}'
+                f'truncated={quoteattr(str(memory["preview_truncated"]).lower())} '
+                f'recall_count={quoteattr(str(memory["recall_count"]))} '
+                f'last_recalled_at={quoteattr(str(memory["last_recalled_at"] or ""))}'
             )
             lines.extend(
                 (f"<memory {item_attributes}>", escape(str(memory["content"])), "</memory>")
@@ -504,12 +523,13 @@ async def recall_memories_tool(
     name="list_memories",
     title="List Memories",
     description=(
-        "Browse stored memories newest-first, with pagination and an optional "
-        "created_at date range. Unlike recall_memories, this does no semantic "
-        "ranking and no token-budget cutoff -- it's a cheap, deterministic "
-        "catalog view for questions like 'what did we do last week', or for "
-        "paging through everything stored. Content is truncated per entry; "
-        "use get_memory for the full text of one."
+        "Browse stored memories, with pagination and an optional created_at "
+        "date range. Unlike recall_memories, this does no semantic ranking "
+        "and no token-budget cutoff -- it's a cheap, deterministic catalog "
+        "view for questions like 'what did we do last week', for paging "
+        "through everything stored, or (with sort='stale') for finding old, "
+        "never-or-rarely-recalled memories worth reviewing. Content is "
+        "truncated per entry; use get_memory for the full text of one."
     ),
 )
 async def list_memories_tool(
@@ -542,11 +562,26 @@ async def list_memories_tool(
     ] = None,
     offset: Annotated[
         int,
-        Field(default=0, ge=0, description="Number of newest-first entries to skip, for pagination."),
+        Field(default=0, ge=0, description="Number of entries to skip, for pagination."),
     ] = 0,
+    sort: Annotated[
+        str,
+        Field(
+            default="recent",
+            description=(
+                "'recent' (default) is newest-first. 'stale' instead surfaces "
+                "the least-recalled, oldest memories first -- good for finding "
+                "memories worth consolidating with update_memory or removing "
+                "with delete_memory."
+            ),
+        ),
+    ] = "recent",
 ) -> str:
     started = time.monotonic()
-    _log(f"list_memories called kind={kind!r} since={since!r} until={until!r} limit={limit} offset={offset}")
+    _log(
+        f"list_memories called kind={kind!r} since={since!r} until={until!r} "
+        f"limit={limit} offset={offset} sort={sort!r}"
+    )
     config = tenant_config(load_context_config())
     try:
         payload = core.list_memories(
@@ -555,6 +590,7 @@ async def list_memories_tool(
             until=until,
             limit=limit,
             offset=offset,
+            sort=sort,
             config=config,
         )
     except MemoryError as exc:

@@ -20,6 +20,7 @@ from tinycontext.errors import (
     AmbiguousMemoryReferenceError,
     EmptyMemoryError,
     InvalidMemoryKindError,
+    InvalidSortError,
     MemoryAlreadySupersededError,
     MemoryNotFoundError,
     RecallBudgetError,
@@ -108,12 +109,12 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
 
     def test_describe_embedding_drift_flags_a_changed_model(self) -> None:
         save_memories([MemoryInput(content="User likes tea")], config=self.config)
-        changed_config = dict(self.config, embedding_model="balanced")
+        changed_config = dict(self.config, embedding_model="fast")
         warning = describe_embedding_drift(changed_config)
         self.assertIsNotNone(warning)
         assert warning is not None
         self.assertIn("1 of 1", warning)
-        self.assertIn("balanced", warning)
+        self.assertIn("fast", warning)
 
     def test_recall_surfaces_notice_while_background_reindex_runs(self) -> None:
         save_memories([MemoryInput(content="User likes tea")], config=self.config)
@@ -125,7 +126,7 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
             release.wait(timeout=5)
             return fake_embed_texts(inputs)
 
-        changed_config = dict(self.config, embedding_model="balanced")
+        changed_config = dict(self.config, embedding_model="fast")
         with patch(
             "tinycontext.services.embedding_reindex_service.embed_texts",
             side_effect=slow_embed,
@@ -678,6 +679,39 @@ class MemoryServiceTests(unittest.IsolatedAsyncioTestCase):
     def test_list_memories_rejects_invalid_kind(self) -> None:
         with self.assertRaises(InvalidMemoryKindError):
             list_memories(kind="bogus", config=self.config)
+
+    def test_list_memories_includes_recall_stats(self) -> None:
+        save_memories([MemoryInput(content="tracked fact")], config=self.config)
+        recall_memories("tracked fact", config=self.config)
+        payload = list_memories(config=self.config)
+        memory = payload["memories"][0]
+        self.assertEqual(memory["recall_count"], 1)
+        self.assertIsNotNone(memory["last_recalled_at"])
+
+    def test_list_memories_stale_sort_surfaces_least_recalled_oldest_first(self) -> None:
+        # Distinct fake-embedding semantic groups (database/storage, python/
+        # backend, hiking/weekend) so save-time dedup doesn't treat any pair
+        # of these as near-duplicates of each other.
+        save_memories([MemoryInput(content="sqlite storage archive")], config=self.config)
+        save_memories([MemoryInput(content="python backend service")], config=self.config)
+        # top_k=1 keeps this recall from also touching "sqlite storage
+        # archive" -- with no rrf cutoff, an unbounded recall returns every
+        # stored candidate and would bump both memories' recall_count,
+        # defeating the setup.
+        recall_memories("python backend service", top_k=1, config=self.config)
+        save_memories([MemoryInput(content="hiking weekend log")], config=self.config)
+        payload = list_memories(sort="stale", config=self.config)
+        self.assertEqual(payload["sort"], "stale")
+        contents = [memory["content"] for memory in payload["memories"]]
+        self.assertEqual(contents.index("sqlite storage archive"), 0)
+        self.assertLess(
+            contents.index("hiking weekend log"),
+            contents.index("python backend service"),
+        )
+
+    def test_list_memories_rejects_invalid_sort(self) -> None:
+        with self.assertRaises(InvalidSortError):
+            list_memories(sort="bogus", config=self.config)
 
     def test_list_memories_validates_limit_and_offset(self) -> None:
         with self.assertRaises(RecallBudgetError):

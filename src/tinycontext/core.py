@@ -12,6 +12,7 @@ from tinycontext.errors import (
     AmbiguousMemoryReferenceError,
     EmptyMemoryError,
     InvalidMemoryKindError,
+    InvalidSortError,
     MemoryAlreadySupersededError,
     MemoryNotFoundError,
     RecallBudgetError,
@@ -443,6 +444,7 @@ def delete_memory(
 _LIST_DEFAULT_LIMIT = 20
 _LIST_MAX_LIMIT = 200
 _LIST_PREVIEW_CHARS = 200
+_LIST_SORT_VALUES = frozenset({"recent", "stale"})
 
 
 def get_memory(memory_id: str, *, config: ConfigInput | None = None) -> dict[str, Any]:
@@ -485,15 +487,21 @@ def list_memories(
     until: str | None = None,
     limit: int | None = None,
     offset: int = 0,
+    sort: str = "recent",
     config: ConfigInput | None = None,
 ) -> dict[str, Any]:
-    """Browse stored memories newest-first: a cheap, deterministic catalog view.
+    """Browse stored memories: a cheap, deterministic catalog view.
 
     Unlike ``recall_memories`` this does no embedding calls, no ranking, and
     no token-budget cutoff -- it's meant for paging through what's stored
     (optionally scoped to a date range) rather than finding what's relevant
     to a query. Content is truncated to a short preview per entry; use
     ``get_memory`` to read one entry in full.
+
+    ``sort="recent"`` (default) is newest-first. ``sort="stale"`` instead
+    surfaces the least-recalled, oldest memories first -- candidates to
+    review, consolidate with ``update_memory``, or remove with
+    ``delete_memory``.
     """
     if limit is not None and limit < 1:
         raise RecallBudgetError("limit must be at least 1")
@@ -502,6 +510,10 @@ def list_memories(
     if kind is not None and kind not in MEMORY_KINDS:
         raise InvalidMemoryKindError(
             f"kind must be one of {sorted(MEMORY_KINDS)}, got {kind!r}"
+        )
+    if sort not in _LIST_SORT_VALUES:
+        raise InvalidSortError(
+            f"sort must be one of {sorted(_LIST_SORT_VALUES)}, got {sort!r}"
         )
 
     resolved = _resolved_values(config)
@@ -517,6 +529,7 @@ def list_memories(
         offset=offset,
         since=since,
         until=until,
+        order_by=sort,
     )
     total_count = count_memories(
         db_path, session_id=session_id, kind=kind, since=since, until=until
@@ -537,6 +550,8 @@ def list_memories(
                 "content_tokens": content_tokens,
                 "preview_truncated": preview_truncated,
                 "created_at": row.created_at,
+                "recall_count": row.recall_count,
+                "last_recalled_at": row.last_recalled_at,
                 "rank": offset + index,
             }
         )
@@ -549,6 +564,7 @@ def list_memories(
         "limit": resolved_limit,
         "offset": offset,
         "has_more": offset + len(memories) < total_count,
+        "sort": sort,
     }
 
 

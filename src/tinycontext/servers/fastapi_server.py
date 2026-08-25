@@ -79,6 +79,7 @@ class ListMemoriesRequest(BaseModel):
     until: str | None = None
     limit: int | None = Field(default=None, ge=1)
     offset: int = Field(default=0, ge=0)
+    sort: str = "recent"
 
 
 class GetMemoryRequest(BaseModel):
@@ -186,6 +187,7 @@ async def list_memories_endpoint(request: ListMemoriesRequest) -> dict[str, Any]
             until=request.until,
             limit=request.limit,
             offset=request.offset,
+            sort=request.sort,
             config=config,
         )
     except MemoryError as exc:
@@ -200,6 +202,7 @@ async def list_memories_get(
     until: str | None = None,
     limit: int | None = Query(default=None, ge=1),
     offset: int = Query(default=0, ge=0),
+    sort: str = "recent",
 ) -> dict[str, Any]:
     return await list_memories_endpoint(
         ListMemoriesRequest(
@@ -209,6 +212,7 @@ async def list_memories_get(
             until=until,
             limit=limit,
             offset=offset,
+            sort=sort,
         )
     )
 

@@ -20,7 +20,7 @@ def default_config() -> dict[str, Any]:
         "profile_max_tokens": 500,
         "encoding_name": "o200k_base",
         "models_dir": str(native_models_dir()),
-        "embedding_model": "fast",
+        "embedding_model": "balanced",
         "embedding_backend": "onnx",
         "embedding_openai_env_file": ".env",
         "embedding_batch_size": 32,
@@ -32,7 +32,7 @@ def default_config() -> dict[str, Any]:
         "dedup_similarity_threshold": 0.95,
         "dedup_review_similarity_threshold": 0.80,
         "recall_access_weight": 0.0,
-        "save_length_notice_tokens": 400,
+        "save_length_notice_tokens": 800,
     }
 
 

@@ -243,6 +243,18 @@ class FastApiMemoryEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(second_page["has_more"])
         self.assertEqual(first_page["total_count"], 3)
 
+    async def test_list_memories_endpoint_stale_sort(self) -> None:
+        with patch(
+            "tinycontext.servers.fastapi_server.load_context_config",
+            return_value=self.config,
+        ):
+            await save_memories_endpoint(
+                SaveMemoriesRequest(memories=[MemoryInputModel(content="cold entry")])
+            )
+            payload = await list_memories_endpoint(ListMemoriesRequest(sort="stale"))
+        self.assertEqual(payload["sort"], "stale")
+        self.assertEqual(payload["memories"][0]["recall_count"], 0)
+
     async def test_list_memories_endpoint_filters_by_since_until(self) -> None:
         transport = httpx.ASGITransport(app=app)
         with patch(

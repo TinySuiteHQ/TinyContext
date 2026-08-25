@@ -12,7 +12,7 @@ from typing import Any, Sequence
 from tinycontext.paths import native_data_dir, native_models_dir
 
 
-DEFAULT_EMBEDDING_MODEL = "fast"
+DEFAULT_EMBEDDING_MODEL = "balanced"
 DEFAULT_EMBEDDING_BACKEND = "onnx"
 DEFAULT_EMBEDDING_OPENAI_ENV_FILE = ".env"
 SUPPORTED_EMBEDDING_BACKENDS = (
