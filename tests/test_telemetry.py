@@ -46,12 +46,15 @@ class NoSDK:
             raise ModuleNotFoundError(fullname)
 sys.meta_path.insert(0, NoSDK())
 from tinycontext import recall_memories
+from tinycontext.services.memory_store_service import close_connection
 from tinycontext.telemetry import configure_from_environment
 import tempfile
 from pathlib import Path
 configure_from_environment()
 with tempfile.TemporaryDirectory() as directory:
-    assert recall_memories(config={'memory_db_path': str(Path(directory) / 'm.db')})['memories'] == []
+    db_path = Path(directory) / 'm.db'
+    assert recall_memories(config={'memory_db_path': str(db_path)})['memories'] == []
+    close_connection(db_path)
 assert not any(name.startswith('opentelemetry.sdk') for name in sys.modules)
 ''')
         self.assertEqual(process.returncode, 0, process.stderr)
