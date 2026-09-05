@@ -22,6 +22,7 @@ from tinycontext.services.hosted_tenancy_service import (
     tenant_config,
 )
 from tinycontext.servers.hosted_tenancy_middleware import HostedTenancyMiddleware
+from tinycontext.telemetry import configure_from_environment, shutdown as shutdown_telemetry
 
 
 def _mcp_host() -> str:
@@ -712,6 +713,14 @@ async def delete_memory_tool(
 
 
 def main() -> None:
+    configure_from_environment()
+    try:
+        _run_server()
+    finally:
+        shutdown_telemetry()
+
+
+def _run_server() -> None:
     from tinycontext.services.embedding_service import normalize_embedding_backend
     from tinycontext.services.onnx_bundle_service import ensure_onnx_bundle_sync
 

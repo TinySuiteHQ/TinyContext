@@ -40,6 +40,7 @@ from tinycontext.services.memory_store_service import (
     short_memory_ref,
     supersede_memory,
 )
+from tinycontext.telemetry import instrument, set_attributes
 from tinycontext.services.token_counter_service import token_count
 
 
@@ -69,12 +70,14 @@ def _resolved_values(config: ConfigInput | None) -> dict[str, Any]:
     return resolve_config(config).to_dict()
 
 
+@instrument('save_memories', result="memory", **{"gen_ai.operation.name": 'create_memory'})
 def save_memories(
     memories: Sequence[MemoryInput],
     *,
     session_id: str | None = None,
     config: ConfigInput | None = None,
 ) -> dict[str, Any]:
+    set_attributes(**{"gen_ai.memory.record.count": len(memories)})
     if not memories:
         raise EmptyMemoryError("memories must not be empty")
 
@@ -190,6 +193,7 @@ def save_memories(
 _RECENT_MODE_DEFAULT_TOP_K = 5
 
 
+@instrument('recall_memories', result="memory", **{"gen_ai.operation.name": 'search_memory'})
 def recall_memories(
     query: str | None = None,
     *,
@@ -352,6 +356,7 @@ def _resolve_memory_id(db_path: Path, memory_id: str) -> str:
     return matches[0]
 
 
+@instrument('update_memory', **{"gen_ai.operation.name": 'update_memory'})
 def update_memory(
     memory_id: str,
     content: str,
@@ -359,6 +364,7 @@ def update_memory(
     config: ConfigInput | None = None,
 ) -> dict[str, Any]:
     """Supersede a stored memory with corrected content, preserving history."""
+    set_attributes(**{"gen_ai.memory.record.count": 1})
     memory_id = memory_id.strip()
     if not memory_id:
         raise EmptyMemoryError("memory_id must not be empty")
@@ -420,11 +426,13 @@ def update_memory(
     }
 
 
+@instrument('delete_memory', **{"gen_ai.operation.name": 'delete_memory'})
 def delete_memory(
     memory_id: str,
     *,
     config: ConfigInput | None = None,
 ) -> dict[str, Any]:
+    set_attributes(**{"gen_ai.memory.record.count": 1})
     memory_id = memory_id.strip()
     if not memory_id:
         raise EmptyMemoryError("memory_id must not be empty")
@@ -447,6 +455,7 @@ _LIST_PREVIEW_CHARS = 200
 _LIST_SORT_VALUES = frozenset({"recent", "stale"})
 
 
+@instrument('get_memory')
 def get_memory(memory_id: str, *, config: ConfigInput | None = None) -> dict[str, Any]:
     """Fetch a single memory's full content by ref or id, bypassing recall/ranking."""
     memory_id = memory_id.strip()
@@ -479,6 +488,7 @@ def get_memory(memory_id: str, *, config: ConfigInput | None = None) -> dict[str
     }
 
 
+@instrument('list_memories', result="memory")
 def list_memories(
     *,
     session_id: str | None = None,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
@@ -18,13 +19,25 @@ from tinycontext.services.hosted_tenancy_service import (
     tenant_config,
 )
 from tinycontext.servers.hosted_tenancy_middleware import HostedTenancyMiddleware
+from tinycontext.telemetry import configure_from_environment, shutdown as shutdown_telemetry
 
 
 def _tinycontext_version() -> str:
     return os.environ.get("TINYCONTEXT_VERSION", "dev").strip() or "dev"
 
 
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    configure_from_environment()
+    try:
+        await _prepare_embedding_model()
+        yield
+    finally:
+        shutdown_telemetry()
+
+
 app = FastAPI(
+    lifespan=_lifespan,
     title="TinyContext API",
     description="Token-light hybrid memory save and recall endpoints for agents.",
     version=_tinycontext_version(),
@@ -32,7 +45,6 @@ app = FastAPI(
 app.add_middleware(HostedTenancyMiddleware)
 
 
-@app.on_event("startup")
 async def _prepare_embedding_model() -> None:
     from tinycontext.services.embedding_service import normalize_embedding_backend
     from tinycontext.services.onnx_bundle_service import ensure_onnx_bundle_sync

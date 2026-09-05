@@ -18,6 +18,7 @@ from tinycontext.services.memory_store_service import (
     short_memory_ref,
     update_memory_embeddings,
 )
+from tinycontext.telemetry import instrument, operation, set_attributes
 from tinycontext.services.token_counter_service import token_count
 
 
@@ -76,6 +77,7 @@ def _relevance_label(rrf_similarity: float, dense_score: float) -> str:
     return "low"
 
 
+@instrument("memory_recall", result="memory", **{"gen_ai.operation.name": "search_memory"})
 def memory_recall_run(
     query: str,
     *,
@@ -110,6 +112,7 @@ def memory_recall_run(
     }
 
     total_candidates = count_memories(db_path, session_id=session_id, kind="episodic")
+    set_attributes(**{"tinycontext.candidate.count": total_candidates})
     if total_candidates == 0:
         return empty_result
 
@@ -174,53 +177,54 @@ def memory_recall_run(
         return empty_result
     candidates = fetch_memories_by_ids(db_path, candidate_ids)
 
-    bm25_scores = [float(sparse_scores.get(row.id, 0.0)) for row in candidates]
+    with operation("rank", **{"tinycontext.candidate.count": len(candidates)}):
+        bm25_scores = [float(sparse_scores.get(row.id, 0.0)) for row in candidates]
 
-    dense_values = [float(dense_scores.get(row.id, 0.0)) for row in candidates]
-    bm25_ranks = _rank_by_score(bm25_scores)
-    dense_ranks = _rank_by_score(dense_values)
-    access_ranks = _rank_by_score([float(row.recall_count) for row in candidates])
-    sparse_weight = 1.0 - dense_weight
-    max_rrf_score = (sparse_weight + dense_weight + access_weight) / (rrf_k + 1)
-    fused: list[tuple[MemoryRow, dict[str, float | int | str]]] = []
-    for index, row in enumerate(candidates):
-        bm25_rank = bm25_ranks[index]
-        dense_rank = dense_ranks[index]
-        access_rank = access_ranks[index]
-        rrf_score = (
-            sparse_weight / (rrf_k + bm25_rank)
-            + dense_weight / (rrf_k + dense_rank)
-            + access_weight / (rrf_k + access_rank)
-        )
-        rrf_similarity = rrf_score / max_rrf_score if max_rrf_score else 0.0
-        if (
-            rrf_similarity_cutoff is not None
-            and rrf_similarity < rrf_similarity_cutoff
-        ):
-            continue
-        fused.append(
-            (
-                row,
-                {
-                    "bm25_score": bm25_scores[index],
-                    "bm25_rank": bm25_rank,
-                    "dense_score": dense_values[index],
-                    "dense_rank": dense_rank,
-                    "rrf_score": rrf_score,
-                    "rrf_similarity": rrf_similarity,
-                    "relevance": _relevance_label(rrf_similarity, dense_values[index]),
-                },
+        dense_values = [float(dense_scores.get(row.id, 0.0)) for row in candidates]
+        bm25_ranks = _rank_by_score(bm25_scores)
+        dense_ranks = _rank_by_score(dense_values)
+        access_ranks = _rank_by_score([float(row.recall_count) for row in candidates])
+        sparse_weight = 1.0 - dense_weight
+        max_rrf_score = (sparse_weight + dense_weight + access_weight) / (rrf_k + 1)
+        fused: list[tuple[MemoryRow, dict[str, float | int | str]]] = []
+        for index, row in enumerate(candidates):
+            bm25_rank = bm25_ranks[index]
+            dense_rank = dense_ranks[index]
+            access_rank = access_ranks[index]
+            rrf_score = (
+                sparse_weight / (rrf_k + bm25_rank)
+                + dense_weight / (rrf_k + dense_rank)
+                + access_weight / (rrf_k + access_rank)
             )
-        )
-    ranked = sorted(
-        fused,
-        key=lambda item: (
-            item[1]["rrf_score"],
-            item[1]["dense_score"],
-            item[1]["bm25_score"],
-        ),
-        reverse=True,
-    )[:top_k]
+            rrf_similarity = rrf_score / max_rrf_score if max_rrf_score else 0.0
+            if (
+                rrf_similarity_cutoff is not None
+                and rrf_similarity < rrf_similarity_cutoff
+            ):
+                continue
+            fused.append(
+                (
+                    row,
+                    {
+                        "bm25_score": bm25_scores[index],
+                        "bm25_rank": bm25_rank,
+                        "dense_score": dense_values[index],
+                        "dense_rank": dense_rank,
+                        "rrf_score": rrf_score,
+                        "rrf_similarity": rrf_similarity,
+                        "relevance": _relevance_label(rrf_similarity, dense_values[index]),
+                    },
+                )
+            )
+        ranked = sorted(
+            fused,
+            key=lambda item: (
+                item[1]["rrf_score"],
+                item[1]["dense_score"],
+                item[1]["bm25_score"],
+            ),
+            reverse=True,
+        )[:top_k]
 
     current_time = _utc_now()
     selected: list[dict[str, Any]] = []

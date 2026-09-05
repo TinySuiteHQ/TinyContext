@@ -456,6 +456,104 @@ full, untruncated content plus its lifecycle fields (`recall_count`,
 | `unauthorized` | 401 | Hosted request lacks a valid trusted-proxy identity |
 | `internal_error` | 500 | Unexpected server error |
 
+## OpenTelemetry
+
+TinyContext can emit vendor-neutral OpenTelemetry traces and metrics over OTLP.
+Telemetry is optional and disabled unless you configure a provider or OTLP
+exporter. The Python library always uses the caller's current OpenTelemetry
+providers; the standalone MCP and FastAPI entry points configure providers
+from standard `OTEL_*` environment variables and flush them on shutdown.
+
+Install the optional exporter dependencies for local MCP or Python services:
+
+```bash
+pip install "tinysuite-context[server,telemetry]"
+```
+
+For `uvx`, include the extra in the package spec:
+
+```json
+{
+  "mcpServers": {
+    "tinycontext": {
+      "command": "uvx",
+      "args": [
+        "--python",
+        "3.12",
+        "--from",
+        "tinysuite-context[server,telemetry]",
+        "tinycontext"
+      ],
+      "env": {
+        "OTEL_SERVICE_NAME": "tinycontext",
+        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318"
+      }
+    }
+  }
+}
+```
+
+The Docker image includes the telemetry extra, but still exports nothing until
+you set OTLP configuration:
+
+```bash
+OTEL_SERVICE_NAME=tinycontext \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318 \
+docker compose up -d
+```
+
+TinyContext supports the standard OTLP HTTP/protobuf and gRPC exporters. Signal
+specific settings take precedence over common OTLP settings, so the usual
+OpenTelemetry knobs work:
+
+| Variable | Purpose |
+| --- | --- |
+| `OTEL_SDK_DISABLED=true` | Disable all telemetry |
+| `OTEL_SERVICE_NAME=tinycontext` | Set the service name |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Common OTLP collector endpoint |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` (default) or `grpc` |
+| `OTEL_EXPORTER_OTLP_HEADERS` | Collector headers |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Trace-specific endpoint |
+| `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | Metric-specific endpoint |
+| `OTEL_TRACES_EXPORTER=otlp` | Enable trace export without an endpoint-specific variable |
+| `OTEL_METRICS_EXPORTER=otlp` | Enable metric export without an endpoint-specific variable |
+| `OTEL_TRACES_EXPORTER=none` | Disable traces |
+| `OTEL_METRICS_EXPORTER=none` | Disable metrics |
+
+Emitted spans cover the memory lifecycle and internal stages, including
+`tinycontext.save_memories`, `tinycontext.recall_memories`,
+`tinycontext.memory_recall`, `tinycontext.embed_texts`,
+`tinycontext.rank`, SQLite store fetch/write operations, update, delete,
+list, and background reindex work. They are created below the transport layer,
+so MCP and FastAPI calls produce the same core spans. Internal worker threads
+inherit the active trace context where practical.
+
+Metrics use the same names as TinySearch:
+
+| Metric | Unit | Meaning |
+| --- | --- | --- |
+| `tinycontext.operation.duration` | `s` | Duration of memory operations and internal stages |
+| `tinycontext.operation.result.count` | `{result}` | Count of returned or saved items for successful operations |
+
+Attributes are intentionally small and low-cardinality. TinyContext records
+operation names, candidate/result counts, SQLite as the database system,
+known embedding presets, token counts already present in API responses, and
+standard error status plus `error.type` on failures. Raw memory contents,
+queries, prompts, session IDs, database paths, credentials, collector headers,
+exception messages, and stack traces are not exported by default.
+
+Where current OpenTelemetry semantic conventions fit, TinyContext uses them:
+`gen_ai.operation.name` for memory and embedding operations,
+`gen_ai.memory.record.count` for memory create/search/update/delete counts,
+`gen_ai.request.model` for known embedding presets, and standard span error
+status with `error.type`. MCP semantic spans are reserved for MCP protocol
+instrumentation; TinyContext's spans are internal core spans that work with
+both MCP and FastAPI transports. The relevant upstream references are the
+[OTLP exporter configuration](https://opentelemetry.io/docs/specs/otel/protocol/exporter/),
+[error recording semantic conventions](https://opentelemetry.io/docs/specs/semconv/general/recording-errors/),
+[GenAI span conventions](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-spans.md),
+and [GenAI MCP conventions](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/mcp.md).
+
 ## Configuration
 
 The core defaults are:

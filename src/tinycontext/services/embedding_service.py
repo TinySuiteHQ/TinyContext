@@ -3,13 +3,14 @@ from __future__ import annotations
 import os
 import re
 import threading
-from hashlib import sha256
 from dataclasses import dataclass
 from functools import lru_cache
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Sequence
 
 from tinycontext.paths import native_data_dir, native_models_dir
+from tinycontext.telemetry import instrument, set_attributes
 
 
 DEFAULT_EMBEDDING_MODEL = "balanced"
@@ -413,6 +414,7 @@ def _as_vectors(value: Any) -> list[list[float]]:
     return [[float(item) for item in vector] for vector in value]
 
 
+@instrument("embed_texts", result="length", **{"gen_ai.operation.name": "embeddings"})
 def embed_texts(
     inputs: Sequence[str],
     *,
@@ -426,12 +428,16 @@ def embed_texts(
     if not texts:
         return []
 
-    if normalize_embedding_backend(backend) == "openai_compatible":
+    normalized_backend = normalize_embedding_backend(backend)
+    set_attributes(**{"tinycontext.embedding.backend": normalized_backend})
+    if normalized_backend == "openai_compatible":
         env_path = _resolve_openai_env_path(openai_env_file)
         base_url, api_key, model_name = _parse_openai_env_file(env_path)
         client = _load_openai_client(base_url, api_key)
         return _embed_openai_compatible_sync(client, model_name, texts, base_url=base_url)
 
+    if embedding_model in {"fast", "balanced", "quality"}:
+        set_attributes(**{"gen_ai.request.model": embedding_model})
     return _embed_texts_onnx(texts, embedding_model=embedding_model, models_dir=models_dir, batch_size=batch_size)
 
 

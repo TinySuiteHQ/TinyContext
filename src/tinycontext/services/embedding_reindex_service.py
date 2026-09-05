@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import threading
 import time
+from contextvars import copy_context
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from tinycontext.services.memory_store_service import (
     fetch_candidates,
     update_memory_embeddings,
 )
+from tinycontext.telemetry import operation
 
 _REINDEX_BATCH_SIZE = 16
 
@@ -69,39 +71,40 @@ def _run(
     model_key: str,
 ) -> None:
     try:
-        stale = [
-            row
-            for row in fetch_candidates(db_path)
-            if row.embedding_model != model_key
-        ]
-        with _lock:
-            job = _jobs.get(key)
-            if job is not None:
-                job.total = len(stale)
-
-        batch_size = max(1, min(_REINDEX_BATCH_SIZE, embedding_batch_size))
-        for start in range(0, len(stale), batch_size):
-            batch = stale[start : start + batch_size]
-            vectors = embed_texts(
-                [document_prefix + row.content for row in batch],
-                embedding_model=embedding_model,
-                backend=embedding_backend,
-                models_dir=models_dir,
-                openai_env_file=openai_env_file,
-                batch_size=embedding_batch_size,
-            )
-            update_memory_embeddings(
-                db_path,
-                [
-                    (row.id, vector)
-                    for row, vector in zip(batch, vectors, strict=True)
-                ],
-                embedding_model=model_key,
-            )
+        with operation("reindex"):
+            stale = [
+                row
+                for row in fetch_candidates(db_path)
+                if row.embedding_model != model_key
+            ]
             with _lock:
                 job = _jobs.get(key)
                 if job is not None:
-                    job.completed += len(batch)
+                    job.total = len(stale)
+
+            batch_size = max(1, min(_REINDEX_BATCH_SIZE, embedding_batch_size))
+            for start in range(0, len(stale), batch_size):
+                batch = stale[start : start + batch_size]
+                vectors = embed_texts(
+                    [document_prefix + row.content for row in batch],
+                    embedding_model=embedding_model,
+                    backend=embedding_backend,
+                    models_dir=models_dir,
+                    openai_env_file=openai_env_file,
+                    batch_size=embedding_batch_size,
+                )
+                update_memory_embeddings(
+                    db_path,
+                    [
+                        (row.id, vector)
+                        for row, vector in zip(batch, vectors, strict=True)
+                    ],
+                    embedding_model=model_key,
+                )
+                with _lock:
+                    job = _jobs.get(key)
+                    if job is not None:
+                        job.completed += len(batch)
     except Exception as exc:  # pragma: no cover - defensive background path
         with _lock:
             job = _jobs.get(key)
@@ -151,8 +154,8 @@ def ensure_background_reindex(
     with _lock:
         _jobs[key] = _Job(model_key=model_key, total=mismatched)
         thread = threading.Thread(
-            target=_run,
-            args=(key, db_path),
+            target=copy_context().run,
+            args=(_run, key, db_path),
             kwargs=dict(
                 embedding_model=embedding_model,
                 embedding_backend=embedding_backend,

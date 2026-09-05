@@ -24,7 +24,7 @@ EXPECTED_TOOLS = {
 EXPECTED_PARAMETERS = {
     "save_memories": {"memories"},
     "recall_memories": {"query", "top_k"},
-    "list_memories": {"kind", "since", "until", "limit", "offset"},
+    "list_memories": {"kind", "since", "until", "limit", "offset", "sort"},
     "get_memory": {"memory_id"},
     "update_memory": {"memory_id", "content"},
     "delete_memory": {"memory_id"},

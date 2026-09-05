@@ -13,6 +13,7 @@ from typing import Any, Sequence
 import sqlite_vec
 
 from tinycontext.models import MemoryRow
+from tinycontext.telemetry import instrument
 
 
 _SCHEMA_SQL = """
@@ -229,6 +230,7 @@ def init_db(db_path: Path) -> None:
     _pool._get_or_create(db_path)
 
 
+@instrument('insert_memories', **{"db.system.name": "sqlite"})
 def insert_memories(db_path: Path, rows: list[MemoryRow]) -> None:
     def _insert(conn: sqlite3.Connection) -> None:
         conn.executemany(
@@ -290,6 +292,7 @@ def find_memory_ids_by_ref(db_path: Path, short_ref: str) -> list[str]:
     return _pool.execute(db_path, _find)
 
 
+@instrument('delete_memory', **{"db.system.name": "sqlite"})
 def delete_memory(db_path: Path, memory_id: str) -> bool:
     """Delete a memory by id from both tables. Returns whether it existed."""
 
@@ -319,6 +322,7 @@ def _row_to_memory(row: sqlite3.Row) -> MemoryRow:
     )
 
 
+@instrument("fetch_memory_by_id", **{"db.system.name": "sqlite"})
 def fetch_memory_by_id(db_path: Path, memory_id: str) -> MemoryRow | None:
     """Fetch a single memory row by its full id, or None if it doesn't exist."""
 
@@ -347,6 +351,7 @@ def fetch_memory_by_id(db_path: Path, memory_id: str) -> MemoryRow | None:
     return _pool.execute(db_path, _fetch)
 
 
+@instrument('supersede_memory', **{"db.system.name": "sqlite"})
 def supersede_memory(db_path: Path, old_id: str, new_id: str, superseded_at: str) -> None:
     """Mark ``old_id`` as superseded by ``new_id``, hiding it from default recall."""
 
@@ -360,6 +365,7 @@ def supersede_memory(db_path: Path, old_id: str, new_id: str, superseded_at: str
     _pool.execute(db_path, _update)
 
 
+@instrument('clear_superseded_by', **{"db.system.name": "sqlite"})
 def clear_superseded_by(db_path: Path, memory_id: str) -> None:
     """Un-hide whichever row was superseded by ``memory_id`` (e.g. after it's deleted)."""
 
@@ -374,6 +380,7 @@ def clear_superseded_by(db_path: Path, memory_id: str) -> None:
     _pool.execute(db_path, _update)
 
 
+@instrument('record_recall_hits', **{"db.system.name": "sqlite"})
 def record_recall_hits(db_path: Path, memory_ids: Sequence[str], recalled_at: str) -> None:
     """Bump recall_count and last_recalled_at for memories returned by a recall."""
     if not memory_ids:
@@ -390,6 +397,7 @@ def record_recall_hits(db_path: Path, memory_ids: Sequence[str], recalled_at: st
     _pool.execute(db_path, _update)
 
 
+@instrument('fetch_candidates', result="length", **{"db.system.name": "sqlite"})
 def fetch_candidates(
     db_path: Path,
     *,
@@ -466,6 +474,7 @@ _ORDER_CLAUSES = {
 }
 
 
+@instrument('fetch_recent_memories', result="length", **{"db.system.name": "sqlite"})
 def fetch_recent_memories(
     db_path: Path,
     *,
@@ -540,6 +549,7 @@ def count_memories(
     return _pool.execute(db_path, _count)
 
 
+@instrument('update_memory_embeddings', **{"db.system.name": "sqlite"})
 def update_memory_embeddings(
     db_path: Path,
     rows: Sequence[tuple[str, Sequence[float]]],
@@ -573,6 +583,7 @@ def update_memory_embeddings(
     _pool.execute(db_path, _update)
 
 
+@instrument('fetch_dense_scores', result="length", **{"db.system.name": "sqlite"})
 def fetch_dense_scores(
     db_path: Path,
     query_embedding: Sequence[float],
@@ -624,6 +635,7 @@ def fetch_dense_scores(
     return _pool.execute(db_path, _fetch)
 
 
+@instrument('fetch_sparse_scores', result="length", **{"db.system.name": "sqlite"})
 def fetch_sparse_scores(
     db_path: Path,
     query: str,
@@ -669,6 +681,7 @@ def fetch_sparse_scores(
     return _pool.execute(db_path, _fetch)
 
 
+@instrument('fetch_memories_by_ids', result="length", **{"db.system.name": "sqlite"})
 def fetch_memories_by_ids(db_path: Path, ids: Sequence[str]) -> list[MemoryRow]:
     """Fetch full rows for a specific, already-known id set (e.g. a fused candidate pool)."""
     unique_ids = list(dict.fromkeys(ids))
@@ -701,6 +714,7 @@ def fetch_memories_by_ids(db_path: Path, ids: Sequence[str]) -> list[MemoryRow]:
     return _pool.execute(db_path, _fetch)
 
 
+@instrument('fetch_stale_memories', result="length", **{"db.system.name": "sqlite"})
 def fetch_stale_memories(
     db_path: Path,
     *,
