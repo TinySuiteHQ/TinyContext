@@ -2,24 +2,50 @@
 
 <!-- mcp-name: io.github.TinySuiteHQ/tinycontext -->
 
-**Context that fits your local LLMs.**
+<p align="center">
+  <a href="https://tinysuite.dev">
+    <img src="assets/tinycontext-full-logo.png" alt="TinyContext" width="240" />
+  </a>
+</p>
 
+<p align="center">
+  <strong>Context that fits your local LLMs.</strong>
+</p>
+
+<p align="center">
+  TinyContext is a token-light local memory layer for AI agents. It recalls
+  only the memories that fit your token budget.
+</p>
+
+<p align="center">
+  <a href="https://tinysuite.dev/docs/tinycontext/">Documentation</a>
+  ·
+  <a href="#one-command-mcp">Quick start</a>
+  ·
+  <a href="#python-library">Python</a>
+  ·
+  <a href="https://discord.gg/mFFKF9bf5e">Discord</a>
+</p>
+
+[![Website](https://img.shields.io/badge/tinysuite.dev-home-000000?logo=googlechrome&logoColor=white)](https://tinysuite.dev)
 [![PyPI version](https://img.shields.io/pypi/v/tinysuite-context?label=pypi)](https://pypi.org/project/tinysuite-context/)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/tinysuite-context?period=month&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads%2Fmonth)](https://pepy.tech/projects/tinysuite-context)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/TinySuiteHQ/TinyContext?label=release)](https://github.com/TinySuiteHQ/TinyContext/releases)
+[![Last Commit](https://img.shields.io/github/last-commit/TinySuiteHQ/TinyContext)](https://github.com/TinySuiteHQ/TinyContext/commits/main)
 [![Docker Pulls](https://img.shields.io/docker/pulls/marcellm01/tinycontext?label=docker%20pulls)](https://hub.docker.com/r/marcellm01/tinycontext)
-[![Docker publish](https://github.com/TinySuiteHQ/TinyContext/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/TinySuiteHQ/TinyContext/actions/workflows/docker-publish.yml)
+[![Discord](https://img.shields.io/badge/Discord-Join%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/mFFKF9bf5e)
 ![MCP Server](https://img.shields.io/badge/MCP-server-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-supported-009688)
 
-TinyContext is a token-light local memory layer for AI agents. It stores concise
-memories and their embeddings in SQLite, ranks them with hybrid BM25 and dense
-retrieval, and returns only the context that fits the requested token budget.
+TinyContext stores concise memories and their embeddings in SQLite, ranks them
+with hybrid BM25 and dense retrieval, and returns only the context that fits
+the requested token budget.
 
 No hosted account. No giant context dumps. No required vector database.
 
-Part of TinySuite: small, practical open-source tools for AI workflows, built in
-Europe and maintained with care.
+TinyContext is part of [TinySuite](https://tinysuite.dev), small, practical
+open-source tools for AI workflows, built in Europe and maintained with care.
 
 ## Choose a tier
 
@@ -628,6 +654,36 @@ An existing checkout-local database remains usable:
 TINYCONTEXT_MEMORY_DB_PATH=/absolute/path/to/TinyContext/data/memories.db tinycontext
 ```
 
+## Why TinyContext
+
+- **No vendor in the loop.** No account, no required API key, no per-request
+  billing, no hosted memory service. Memories stay in a SQLite file you own.
+- **Built around token efficiency.** Ranking and budget trimming happen locally,
+  so only the memories that fit the budget reach the model.
+- **No required vector database.** Embeddings and BM25 live in the same SQLite
+  row; `sqlite-vec` handles similarity.
+- **Useful without paid infrastructure.** Local ONNX embeddings are the default.
+- **Works where agents already work.** Use MCP over stdio or Streamable HTTP,
+  Python, FastAPI, or Docker.
+
+## Part of TinySuite
+
+[TinySuite](https://tinysuite.dev) is a product suite built around one idea:
+agents should spend tokens on useful work, not operational overhead.
+
+Each tool focuses on a different part of the agent workflow. TinyContext
+handles the memory layer by recalling a small, ranked set of memories instead
+of resending history.
+
+## When not to use TinyContext
+
+TinyContext is intentionally lightweight. Use a hosted memory service or a full
+vector database when you need:
+
+- very large shared corpora or horizontal scaling
+- managed hosting with an SLA
+- enterprise access controls and audit trails
+
 ## Development
 
 ```bash
@@ -666,14 +722,18 @@ vulnerability.
 
 ## About
 
-TinyContext is part of TinySuite, a collection of small, practical open-source
-tools for AI workflows, built in Europe and maintained with care.
-
-It is built and maintained from Vienna, Austria. The goal is simple: useful
-software, small enough to understand, and maintained long enough to rely on.
-See [SUPPORT.md](SUPPORT.md) for the support policy and
+TinyContext is built and maintained from Vienna, Austria. The goal is simple:
+useful software, small enough to understand, and maintained long enough to
+rely on. See [SUPPORT.md](SUPPORT.md) for the support policy and
 [Releases](https://github.com/TinySuiteHQ/TinyContext/releases) for the
 release history.
+
+## Community
+
+Questions, ideas, and bug reports are welcome:
+
+- [Join the TinySuite Discord](https://discord.gg/mFFKF9bf5e)
+- [Open a GitHub issue](https://github.com/TinySuiteHQ/TinyContext/issues)
 
 ## License
 
