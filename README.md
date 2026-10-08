@@ -18,6 +18,9 @@ retrieval, and returns only the context that fits the requested token budget.
 
 No hosted account. No giant context dumps. No required vector database.
 
+Part of TinySuite: small, practical open-source tools for AI workflows, built in
+Europe and maintained with care.
+
 ## Choose a tier
 
 | Tier | Use it when | Entry point |
@@ -660,6 +663,17 @@ uvicorn servers.fastapi_server:app --host 0.0.0.0 --port 8000
 Release images are scanned with Trivy, run as a non-root user, and signed
 with Cosign. See [SECURITY.md](SECURITY.md) for details and how to report a
 vulnerability.
+
+## About
+
+TinyContext is part of TinySuite, a collection of small, practical open-source
+tools for AI workflows, built in Europe and maintained with care.
+
+It is built and maintained from Vienna, Austria. The goal is simple: useful
+software, small enough to understand, and maintained long enough to rely on.
+See [SUPPORT.md](SUPPORT.md) for the support policy and
+[Releases](https://github.com/TinySuiteHQ/TinyContext/releases) for the
+release history.
 
 ## License
 
