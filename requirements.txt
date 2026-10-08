@@ -9,3 +9,5 @@ openai==2.48.0
 fastapi==0.136.1
 uvicorn==0.46.0
 mcp==1.28.1
+urllib3>=2.8.0,<3
+PyJWT>=2.15.1,<3
