@@ -32,6 +32,7 @@
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/tinysuite-context?period=month&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads%2Fmonth)](https://pepy.tech/projects/tinysuite-context)
 [![CI](https://github.com/TinySuiteHQ/TinyContext/actions/workflows/ci.yml/badge.svg)](https://github.com/TinySuiteHQ/TinyContext/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-%E2%89%A5%203.12-3776AB?logo=python&logoColor=white)](pyproject.toml)
 [![Release](https://img.shields.io/github/v/release/TinySuiteHQ/TinyContext?label=release)](https://github.com/TinySuiteHQ/TinyContext/releases)
 [![Last Commit](https://img.shields.io/github/last-commit/TinySuiteHQ/TinyContext)](https://github.com/TinySuiteHQ/TinyContext/commits/main)
 [![Docker Pulls](https://img.shields.io/docker/pulls/marcellm01/tinycontext?label=docker%20pulls)](https://hub.docker.com/r/marcellm01/tinycontext)
