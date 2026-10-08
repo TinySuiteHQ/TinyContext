@@ -30,6 +30,7 @@
 [![Website](https://img.shields.io/badge/tinysuite.dev-home-000000?logo=googlechrome&logoColor=white)](https://tinysuite.dev)
 [![PyPI version](https://img.shields.io/pypi/v/tinysuite-context?label=pypi)](https://pypi.org/project/tinysuite-context/)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/tinysuite-context?period=month&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads%2Fmonth)](https://pepy.tech/projects/tinysuite-context)
+[![CI](https://github.com/TinySuiteHQ/TinyContext/actions/workflows/ci.yml/badge.svg)](https://github.com/TinySuiteHQ/TinyContext/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/TinySuiteHQ/TinyContext?label=release)](https://github.com/TinySuiteHQ/TinyContext/releases)
 [![Last Commit](https://img.shields.io/github/last-commit/TinySuiteHQ/TinyContext)](https://github.com/TinySuiteHQ/TinyContext/commits/main)
