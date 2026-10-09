@@ -28,3 +28,5 @@ uv.lock
 \benchmark_index_recall_speed.latest.json
 \benchmark_recall_accuracy.latest.json
 \benchmark_token_savings.latest.json
+\benchmark_locomo.latest.json
+\benchmark_longmemeval.latest.json

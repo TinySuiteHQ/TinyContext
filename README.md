@@ -375,6 +375,25 @@ a harder or larger-scale accuracy eval against TinyContext — adversarial
 near-duplicates, a real conversational dataset, whatever — we'd genuinely
 like to see it, good or bad. Open an issue or a PR with what you found.
 
+### LoCoMo and LongMemEval (retrieval only)
+
+`scripts/benchmark_locomo.py` and `scripts/benchmark_longmemeval.py` run
+TinyContext against the two standard conversational-memory datasets, grading
+whether `recall_memories` returns the turns or sessions the dataset labels as
+evidence, within the configured token budget and top-k. They use no LLM, so the
+results are deterministic and need no API key. Datasets are downloaded to
+`.cache/benchmarks/` on first run.
+
+These are **retrieval** metrics, not the LLM-judged answer accuracy that Mem0,
+Zep and Letta publish, so they are not directly comparable to those figures.
+
+```bash
+python scripts/benchmark_locomo.py --json-out scripts/benchmark_locomo.latest.json
+python scripts/benchmark_longmemeval.py --limit 50 --json-out scripts/benchmark_longmemeval.latest.json
+```
+
+Results: not yet run.
+
 ## FastAPI
 
 The optional HTTP API mirrors the MCP tools.
