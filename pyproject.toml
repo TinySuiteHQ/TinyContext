@@ -39,7 +39,7 @@ telemetry = [
 server = [
     "fastapi==0.136.1",
     "uvicorn==0.46.0",
-    "mcp==1.28.1",
+    "mcp==1.30.0",
     "PyJWT>=2.15.1,<3",
 ]
 
