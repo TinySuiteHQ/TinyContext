@@ -98,7 +98,7 @@ TinyContext exposes six tools:
 ```text
 save_memories(memories)
 recall_memories(query=None, top_k=None)
-list_memories(kind=None, since=None, until=None, limit=None, offset=0)
+list_memories(kind=None, since=None, until=None, limit=None, offset=0, sort="recent")
 get_memory(memory_id)
 update_memory(memory_id, content)
 delete_memory(memory_id)
@@ -107,7 +107,7 @@ delete_memory(memory_id)
 - Use `save_memories` for durable facts, preferences, decisions, and research notes. Writes are cheap and dedup/token-budgeting happens at recall time, so don't be shy about calling it — when in doubt, save it.
 - Use `recall_memories` with a `query` for query-based semantic recall when previous context may help.
 - Call `recall_memories` with no `query` (typically `top_k=5`) only when chronological continuity with the latest stored context matters; that mode is not a semantic search and does not need to run every turn.
-- Use `list_memories` to browse the store newest-first, with pagination (`limit`/`offset`) and an optional `since`/`until` date range on `created_at`. It does no embedding calls, no ranking, and no token-budget cutoff, so it's the answer to "what's actually in there" and "what did we do last week" — ground on `current_time` from a recent recall/list response, compute the range, and page with `offset` until `has_more` is false. It's also how to see the rest of a `recall_memories` response that a token budget cut short (that response's `<notice>` says so, alongside `matched_count`).
+- Use `list_memories` to browse the store newest-first, with pagination (`limit`/`offset`) and an optional `since`/`until` date range on `created_at`. It does no embedding calls, no ranking, and no token-budget cutoff, so it's the answer to "what's actually in there" and "what did we do last week" — ground on `current_time` from a recent recall/list response, compute the range, and page with `offset` until `has_more` is false. It's also how to see the rest of a `recall_memories` response that a token budget cut short (that response's `<notice>` says so, alongside `matched_count`). `sort="stale"` lists the least-recalled, oldest memories first, to find ones worth merging with `update_memory` or removing.
 - Use `get_memory` to read one memory's full content by `ref`/id, bypassing ranking — e.g. after `list_memories` shows a truncated preview.
 - Use `delete_memory` to forget or correct a previously saved memory (find its `ref` via `recall_memories` or `list_memories` first).
 
@@ -539,6 +539,11 @@ full, untruncated content plus its lifecycle fields (`recall_count`,
 | `empty_memory` | 400 | Missing or blank memory content/query |
 | `session_not_found` | 404 | No memories exist for the requested session |
 | `recall_budget` | 400 | Invalid recall budget parameters |
+| `memory_not_found` | 404 | No memory matches the given `ref` or id |
+| `ambiguous_memory_reference` | 409 | A short `ref` matches more than one memory |
+| `memory_already_superseded` | 409 | The memory was already replaced by `update_memory` |
+| `invalid_memory_kind` | 400 | `kind` is not `episodic` or `profile` |
+| `invalid_sort` | 400 | `sort` is not `recent`, `stale`, or (with `search`) `relevance` |
 | `invalid_filter` | 400 | `search` is longer than 200 characters |
 | `unauthorized` | 401 | Hosted request lacks a valid trusted-proxy identity |
 | `internal_error` | 500 | Unexpected server error |
@@ -689,12 +694,18 @@ Environment overrides:
 | `TINYCONTEXT_ENCODING_NAME` | Override the tokenizer |
 | `TINYCONTEXT_MODELS_DIR` | Override the ONNX bundle directory |
 | `TINYCONTEXT_EMBEDDING_MODEL` | Override the embedding model |
+| `TINYCONTEXT_EMBEDDING_BACKEND` | Override the embedding backend (`onnx` or `openai_compatible`) |
+| `TINYCONTEXT_EMBEDDING_OPENAI_ENV_FILE` | Override the env file read by the `openai_compatible` backend |
 | `TINYCONTEXT_EMBEDDING_BATCH_SIZE` | Override inference batch size |
 | `TINYCONTEXT_RECALL_RRF_CUTOFF` | Override the normalized hybrid RRF cutoff |
 | `TINYCONTEXT_RECALL_DENSE_WEIGHT` | Override the dense RRF weight |
 | `TINYCONTEXT_RECALL_RRF_K` | Override the RRF rank constant |
 | `TINYCONTEXT_DENSE_QUERY_PREFIX` | Override the dense query prefix |
 | `TINYCONTEXT_DENSE_DOCUMENT_PREFIX` | Override the dense document prefix |
+| `TINYCONTEXT_RECALL_ACCESS_WEIGHT` | Override the recall-frequency ranking weight |
+| `TINYCONTEXT_DEDUP_SIMILARITY_THRESHOLD` | Override the duplicate-skip similarity |
+| `TINYCONTEXT_DEDUP_REVIEW_SIMILARITY_THRESHOLD` | Override the `similar_to` notice similarity |
+| `TINYCONTEXT_SAVE_LENGTH_NOTICE_TOKENS` | Override the "consider splitting" length |
 | `TINYCONTEXT_VERSION` | Set the FastAPI/container version |
 | `MCP_TRANSPORT` | `stdio`, `sse`, or `streamable-http` |
 | `MCP_HOST` | MCP HTTP bind host |
