@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import socket
 import threading
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import Any
+from unittest.mock import patch
 
 import httpx
 import uvicorn
@@ -43,6 +45,10 @@ class RunningMcpServer:
         return f"http://127.0.0.1:{self.port}/mcp"
 
     def __enter__(self) -> RunningMcpServer:
+        # Declared like a real HTTP deployment: code that tells stdio from
+        # HTTP by the configured transport must see HTTP here.
+        self._transport = patch.dict(os.environ, {"MCP_TRANSPORT": "streamable-http"})
+        self._transport.start()
         self._thread.start()
         deadline = time.monotonic() + 15
         while not self._server.started:
@@ -54,6 +60,7 @@ class RunningMcpServer:
     def __exit__(self, *_exc: object) -> None:
         self._server.should_exit = True
         self._thread.join(timeout=15)
+        self._transport.stop()
         mcp_server.mcp._session_manager = None
 
 

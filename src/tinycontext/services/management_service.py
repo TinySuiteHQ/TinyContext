@@ -31,6 +31,7 @@ from tinycontext.config import resolve_config
 from tinycontext.models import MEMORY_KINDS
 from tinycontext.services.hosted_tenancy_service import (
     hosted_tenancy_enabled,
+    http_transport,
     load_hosted_tenancy_config,
     mcp_message_scope,
 )
@@ -98,9 +99,17 @@ def _token_matches(scope: Mapping[str, Any]) -> bool:
     return bool(token and supplied and hmac.compare_digest(token, supplied))
 
 
+def _is_local_operator(scope: Mapping[str, Any] | None) -> bool:
+    # No HTTP request *and* a stdio server: decided by how the server was
+    # started, so a missing request over HTTP is never mistaken for one.
+    return scope is None and not http_transport()
+
+
 def _instance_allowed() -> bool:
     scope = mcp_message_scope()
-    return scope is None or _token_matches(scope)
+    if _is_local_operator(scope):
+        return True
+    return scope is not None and _token_matches(scope)
 
 
 def authorize(view_scope: str) -> None:
@@ -114,8 +123,10 @@ def authorize(view_scope: str) -> None:
     if not management_enabled():
         raise ManagementAccessError("management views are disabled on this server")
     scope = mcp_message_scope()
-    if scope is None:
+    if _is_local_operator(scope):
         return
+    if scope is None:
+        raise ManagementAccessError("management views need an HTTP request to authenticate")
     if management_token():
         if not _token_matches(scope):
             raise ManagementAccessError("management views need the management token")

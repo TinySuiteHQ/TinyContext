@@ -121,8 +121,8 @@ def reset_hosted_user(token: contextvars.Token[str | None]) -> None:
     _current_user_id.reset(token)
 
 
-def mcp_message_scope() -> Mapping[str, Any] | None:
-    """The ASGI scope of the HTTP request that carried the current MCP message.
+def mcp_message_context() -> tuple[bool, Mapping[str, Any] | None]:
+    """(inside an MCP message, the ASGI scope of the HTTP request that carried it).
 
     An MCP session's handler task is created by the request that opened the
     session, so a contextvar bound by the ASGI middleware only ever reaches
@@ -130,16 +130,26 @@ def mcp_message_scope() -> Mapping[str, Any] | None:
     request travels in the SDK's request context instead, which is what has
     to decide the tenant: otherwise a client that reuses one session for
     several users (a shared chat UI, a gateway) runs every user's calls in
-    the store of whoever connected first.
+    the store of whoever connected first. The scope is None for stdio.
     """
     try:
         from mcp.server.lowlevel.server import request_ctx
     except ImportError:
-        return None
+        return False, None
     context = request_ctx.get(None)
-    request = getattr(context, "request", None) if context is not None else None
-    scope = getattr(request, "scope", None)
-    return scope if isinstance(scope, Mapping) else None
+    if context is None:
+        return False, None
+    scope = getattr(getattr(context, "request", None), "scope", None)
+    return True, scope if isinstance(scope, Mapping) else None
+
+
+def mcp_message_scope() -> Mapping[str, Any] | None:
+    return mcp_message_context()[1]
+
+
+def http_transport() -> bool:
+    """Whether the MCP server was started over HTTP (sse or streamable-http)."""
+    return (os.environ.get("MCP_TRANSPORT", "stdio").strip() or "stdio") != "stdio"
 
 
 def current_hosted_user() -> str | None:
@@ -147,12 +157,16 @@ def current_hosted_user() -> str | None:
 
     MCP messages are re-resolved from their own HTTP request (peer address
     and identity header, every message); FastAPI requests use the identity
-    the middleware bound for that request.
+    the middleware bound for that request. Hosted mode only runs over HTTP,
+    so an MCP message with no request means the SDK stopped passing it:
+    that is refused, never answered from the session-wide fallback.
     """
     if not hosted_tenancy_enabled():
         return None
-    scope = mcp_message_scope()
-    if scope is not None:
+    inside, scope = mcp_message_context()
+    if inside:
+        if scope is None:
+            raise HostedTenancyError("MCP message carried no HTTP request; refusing to guess the tenant")
         return resolve_hosted_user(scope)
     user_id = _current_user_id.get()
     if user_id is None:

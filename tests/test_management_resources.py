@@ -240,6 +240,24 @@ class AccessRuleTests(unittest.TestCase):
             manage.authorize("instance")
             self.assertIn("service", [v["id"] for v in manage.manifest()["views"]])
 
+    def test_an_http_message_without_its_request_is_refused_not_trusted(self) -> None:
+        # If the SDK ever stops attaching each message's HTTP request, nothing
+        # may fall back to the session-wide identity or to "local operator".
+        from tinycontext.services import hosted_tenancy_service as tenancy
+
+        hosted = {**{k: v.replace("{root}", tempfile.gettempdir()) for k, v in HOSTED.items()},
+                  "MCP_TRANSPORT": "streamable-http"}
+        with patch.dict(os.environ, hosted),                 patch.object(tenancy, "mcp_message_context", return_value=(True, None)),                 patch.object(manage, "mcp_message_scope", return_value=None):
+            token = tenancy.bind_hosted_user("first-user-of-the-session")
+            try:
+                with self.assertRaises(tenancy.HostedTenancyError):
+                    tenancy.current_hosted_user()
+            finally:
+                tenancy.reset_hosted_user(token)
+            with self.assertRaises(manage.ManagementAccessError):
+                manage.authorize("user")
+            self.assertFalse(manage._instance_allowed())
+
     def test_unknown_parameters_are_rejected(self) -> None:
         with self.assertRaises(ValueError):
             manage.decode_params(quote("q=a&user=bob", safe=""), {"q"})
