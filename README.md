@@ -256,6 +256,38 @@ the source user ID. Existing `/data/memories.db` data is not migrated, because
 it has no safe ownership attribution. `session_id` remains an optional scope
 inside a single user's store.
 
+The identity is checked on every MCP message, not once per session. A proxy or
+chat front end may reuse one MCP session for several users, and each message
+still lands in the store of the user its own header names.
+
+### Management views
+
+A client UI (TinyWebUI's MCP panel, for one) can browse, search, edit and
+delete a user's memories through the same MCP connection the tools use. Set
+`TINYCONTEXT_MANAGEMENT=on`, and the server adds MCP resources following the
+`tinysuite.manage/1` contract: a manifest
+(`tinycontext://manage/manifest`, media type
+`application/vnd.tinysuite.manage+json`) that names the views, and the views
+themselves.
+
+- **Memories:** a paged table with keyword search (the BM25 index recall
+  uses, ranked best match first), type and order filters, and full detail per
+  memory. Edits and deletes call the ordinary
+  `update_memory` and `delete_memory` tools.
+- **Overview:** counts by type, never-recalled memories, and time bounds.
+- **Service** (operators only): store count, disk use, embedding setup.
+
+Every view shows only the caller's own store, under the same rules as the
+tools. Management is off by default. Over HTTP it also needs an authenticated
+caller, or the server refuses to start:
+
+- In hosted mode, the trusted proxy's identity opens the user views.
+- `TINYCONTEXT_MANAGEMENT_TOKEN` (24+ characters) requires
+  `Authorization: Bearer <token>` on every management read, and also opens the
+  Service view.
+
+A local stdio client is the operator and sees every view.
+
 Stop the service with:
 
 ```bash
@@ -482,7 +514,11 @@ recency ranks, timestamps, token counts, and the configured token-budget result.
 includes `total_count`, `returned_count`, and `has_more` for pagination, plus
 a `preview_truncated` flag per entry (content is truncated to a short
 preview; fetch the rest with `/get_memory`). This also accepts
-`GET /list_memories?since=...&until=...&limit=...&offset=...`.
+`GET /list_memories?since=...&until=...&limit=...&offset=...`. Add
+`search` (up to 200 characters) to keep only keyword matches from the BM25
+index recall uses: every word must appear, and the last may be a prefix
+(`pyth` finds `python`). Searched results default to `sort=relevance`, best
+match first; `recent` and `stale` still apply.
 
 ### Get request
 
@@ -503,6 +539,7 @@ full, untruncated content plus its lifecycle fields (`recall_count`,
 | `empty_memory` | 400 | Missing or blank memory content/query |
 | `session_not_found` | 404 | No memories exist for the requested session |
 | `recall_budget` | 400 | Invalid recall budget parameters |
+| `invalid_filter` | 400 | `search` is longer than 200 characters |
 | `unauthorized` | 401 | Hosted request lacks a valid trusted-proxy identity |
 | `internal_error` | 500 | Unexpected server error |
 
@@ -668,6 +705,8 @@ Environment overrides:
 | `TINYCONTEXT_TENANT_STORE_DIR` | Required root directory for per-user SQLite files in hosted mode |
 | `TINYCONTEXT_TENANT_SECRET` | Required stable secret (at least 32 bytes) for opaque tenant filenames |
 | `TINYCONTEXT_TRUSTED_PROXY_CIDRS` | Required direct proxy CIDR list in hosted mode |
+| `TINYCONTEXT_MANAGEMENT` | `on` to expose the management views (default `off`) |
+| `TINYCONTEXT_MANAGEMENT_TOKEN` | Bearer token for management reads over HTTP; also opens the Service view |
 
 An existing checkout-local database remains usable:
 

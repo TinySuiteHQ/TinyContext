@@ -11,6 +11,7 @@ from tinycontext.config import ConfigInput, resolve_config
 from tinycontext.errors import (
     AmbiguousMemoryReferenceError,
     EmptyMemoryError,
+    InvalidFilterError,
     InvalidMemoryKindError,
     InvalidSortError,
     MemoryAlreadySupersededError,
@@ -37,6 +38,7 @@ from tinycontext.services.memory_store_service import (
     find_memory_ids_by_ref,
     insert_memories,
     looks_like_short_ref,
+    search_match_query,
     short_memory_ref,
     supersede_memory,
 )
@@ -452,7 +454,8 @@ def delete_memory(
 _LIST_DEFAULT_LIMIT = 20
 _LIST_MAX_LIMIT = 200
 _LIST_PREVIEW_CHARS = 200
-_LIST_SORT_VALUES = frozenset({"recent", "stale"})
+_LIST_SORT_VALUES = frozenset({"recent", "stale", "relevance"})
+_LIST_SEARCH_MAX_CHARS = 200
 
 
 @instrument('get_memory')
@@ -497,7 +500,8 @@ def list_memories(
     until: str | None = None,
     limit: int | None = None,
     offset: int = 0,
-    sort: str = "recent",
+    sort: str | None = None,
+    search: str | None = None,
     config: ConfigInput | None = None,
 ) -> dict[str, Any]:
     """Browse stored memories: a cheap, deterministic catalog view.
@@ -512,6 +516,12 @@ def list_memories(
     surfaces the least-recalled, oldest memories first -- candidates to
     review, consolidate with ``update_memory``, or remove with
     ``delete_memory``.
+
+    ``search`` keeps only keyword matches from the same BM25 (FTS5) index
+    recall uses -- every word, the last as a prefix, so it behaves like a
+    search box -- and still needs no embeddings. With a search the default
+    order is ``sort="relevance"``, best match first; ``recent`` and
+    ``stale`` still apply. Text with no words in it is no search.
     """
     if limit is not None and limit < 1:
         raise RecallBudgetError("limit must be at least 1")
@@ -521,10 +531,19 @@ def list_memories(
         raise InvalidMemoryKindError(
             f"kind must be one of {sorted(MEMORY_KINDS)}, got {kind!r}"
         )
+    if search is not None and len(search) > _LIST_SEARCH_MAX_CHARS:
+        raise InvalidFilterError(
+            f"search must be at most {_LIST_SEARCH_MAX_CHARS} characters"
+        )
+    searching = search_match_query(search) is not None
+    if sort is None:
+        sort = "relevance" if searching else "recent"
     if sort not in _LIST_SORT_VALUES:
         raise InvalidSortError(
             f"sort must be one of {sorted(_LIST_SORT_VALUES)}, got {sort!r}"
         )
+    if sort == "relevance" and not searching:
+        raise InvalidSortError("sort='relevance' needs a search")
 
     resolved = _resolved_values(config)
     db_path = Path(str(resolved["memory_db_path"]))
@@ -540,9 +559,11 @@ def list_memories(
         since=since,
         until=until,
         order_by=sort,
+        search=search,
     )
     total_count = count_memories(
-        db_path, session_id=session_id, kind=kind, since=since, until=until
+        db_path, session_id=session_id, kind=kind, since=since, until=until,
+        search=search,
     )
 
     memories: list[dict[str, Any]] = []
