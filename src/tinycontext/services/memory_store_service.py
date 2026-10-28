@@ -463,6 +463,36 @@ def _recent_memories_filters(
     return clause, params
 
 
+def search_match_query(search: str | None) -> str | None:
+    """An FTS5 MATCH for a search box: every word, the last one as a prefix.
+
+    Words are AND-ed so each one typed narrows the list, and the last is a
+    prefix so it narrows while still being typed ("pyth" finds "python").
+    Every token is quoted, so FTS5's own operators in the text are inert.
+    None when the text holds no words: no search, not an empty one.
+    """
+    tokens = _FTS_TOKEN_RE.findall((search or "").lower())[:12]
+    if not tokens:
+        return None
+    terms = [f'"{token}"' for token in tokens]
+    terms[-1] += "*"
+    return " AND ".join(terms)
+
+
+def _search_join(match_query: str | None) -> tuple[str, list[Any]]:
+    # A subquery rather than a plain join keeps every column name in the
+    # outer query unambiguous (memories_fts has id, session_id and content
+    # too), so the filters and orders below apply unchanged.
+    if match_query is None:
+        return "", []
+    return (
+        " JOIN (SELECT id AS hit_id, bm25(memories_fts) AS hit_rank"
+        " FROM memories_fts WHERE memories_fts MATCH ?) AS hits"
+        " ON hits.hit_id = memories.id",
+        [match_query],
+    )
+
+
 _ORDER_CLAUSES = {
     # rowid makes equal-second and same-batch saves deterministic: the later
     # inserted row is the newer one when timestamps tie.
@@ -471,6 +501,8 @@ _ORDER_CLAUSES = {
     # since SQLite orders NULL before any value in ASC order; among those,
     # the oldest surfaces first as the strongest prune/consolidate candidate.
     "stale": " ORDER BY recall_count ASC, last_recalled_at ASC, created_at ASC, rowid ASC",
+    # Best BM25 match first (FTS5's bm25 is lower-is-better); only with a search.
+    "relevance": " ORDER BY hits.hit_rank ASC, created_at DESC, rowid DESC",
 }
 
 
@@ -485,18 +517,26 @@ def fetch_recent_memories(
     since: str | None = None,
     until: str | None = None,
     order_by: str = "recent",
+    search: str | None = None,
 ) -> list[MemoryRow]:
     """Fetch stored memories without touching embeddings.
 
     ``order_by="recent"`` (default) is newest-first. ``order_by="stale"``
     surfaces the least-recalled, oldest memories first -- candidates for
-    review, consolidation, or deletion.
+    review, consolidation, or deletion. ``search`` keeps only BM25 keyword
+    matches (see ``search_match_query``), and ``order_by="relevance"`` ranks
+    them best match first.
     """
+    match_query = search_match_query(search)
+    if order_by == "relevance" and match_query is None:
+        order_by = "recent"
 
     def _fetch(conn: sqlite3.Connection) -> list[MemoryRow]:
-        clause, params = _recent_memories_filters(
+        join, params = _search_join(match_query)
+        clause, filter_params = _recent_memories_filters(
             session_id=session_id, kind=kind, since=since, until=until
         )
+        params += filter_params
         query = (
             """
         SELECT
@@ -513,6 +553,7 @@ def fetch_recent_memories(
           kind
         FROM memories
         """
+            + join
             + clause
             + _ORDER_CLAUSES[order_by]
         )
@@ -534,19 +575,47 @@ def count_memories(
     kind: str | None = None,
     since: str | None = None,
     until: str | None = None,
+    search: str | None = None,
 ) -> int:
     """Count stored (non-superseded) memories matching the given filters."""
+    match_query = search_match_query(search)
 
     def _count(conn: sqlite3.Connection) -> int:
-        clause, params = _recent_memories_filters(
+        join, params = _search_join(match_query)
+        clause, filter_params = _recent_memories_filters(
             session_id=session_id, kind=kind, since=since, until=until
         )
         row = conn.execute(
-            "SELECT COUNT(*) AS total FROM memories" + clause, params
+            "SELECT COUNT(*) AS total FROM memories" + join + clause,
+            params + filter_params,
         ).fetchone()
         return int(row["total"])
 
     return _pool.execute(db_path, _count)
+
+
+def memory_stats(db_path: Path) -> dict[str, Any]:
+    """Counts and time bounds for one store, in a single pass."""
+
+    def _stats(conn: sqlite3.Connection) -> dict[str, Any]:
+        row = conn.execute(
+            """
+            SELECT
+              SUM(superseded_by IS NULL) AS active,
+              SUM(superseded_by IS NULL AND kind = 'episodic') AS episodic,
+              SUM(superseded_by IS NULL AND kind = 'profile') AS profile,
+              SUM(superseded_by IS NULL AND recall_count = 0) AS never_recalled,
+              SUM(superseded_by IS NOT NULL) AS superseded,
+              MIN(CASE WHEN superseded_by IS NULL THEN created_at END) AS oldest,
+              MAX(CASE WHEN superseded_by IS NULL THEN created_at END) AS newest,
+              MAX(last_recalled_at) AS last_recalled
+            FROM memories
+            """
+        ).fetchone()
+        return {key: row[key] or (None if key in {"oldest", "newest", "last_recalled"} else 0)
+                for key in row.keys()}
+
+    return _pool.execute(db_path, _stats)
 
 
 @instrument('update_memory_embeddings', **{"db.system.name": "sqlite"})

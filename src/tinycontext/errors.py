@@ -37,6 +37,10 @@ class InvalidSortError(MemoryError):
     pass
 
 
+class InvalidFilterError(MemoryError):
+    pass
+
+
 MEMORY_ERROR_MAP: dict[type[Exception], tuple[str, int]] = {
     EmptyMemoryError: ("empty_memory", 400),
     SessionNotFoundError: ("session_not_found", 404),
@@ -46,4 +50,5 @@ MEMORY_ERROR_MAP: dict[type[Exception], tuple[str, int]] = {
     MemoryAlreadySupersededError: ("memory_already_superseded", 409),
     InvalidMemoryKindError: ("invalid_memory_kind", 400),
     InvalidSortError: ("invalid_sort", 400),
+    InvalidFilterError: ("invalid_filter", 400),
 }

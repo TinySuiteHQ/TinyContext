@@ -717,6 +717,55 @@ async def delete_memory_tool(
     return payload
 
 
+_management_registered = False
+
+
+def register_management_resources() -> None:
+    """Add the tinysuite.manage/1 resources (see services/management_service.py).
+
+    Registered only when management is on, so a server with it off has
+    nothing for a client to discover. Every read resolves the tenant and the
+    caller's access per message, exactly like a tool call.
+    """
+    global _management_registered
+    if _management_registered:
+        return
+    import json
+
+    from tinycontext.services import management_service as manage
+
+    def views(name: str) -> str:
+        return manage.VIEW_URI.format(view=name)
+
+    @mcp.resource(
+        manage.MANIFEST_URI,
+        name="tinycontext-management",
+        title="TinyContext management",
+        description="Manifest of the memory management views a client UI can show.",
+        mime_type=manage.MANIFEST_MIME,
+    )
+    def management_manifest() -> str:
+        return json.dumps(manage.manifest())
+
+    @mcp.resource(views("memories"), name="tinycontext-memories", mime_type="application/json")
+    def management_memories(params: str) -> str:
+        return json.dumps(manage.memories_view(params, tenant_config(load_context_config())))
+
+    @mcp.resource(manage.ITEM_URI, name="tinycontext-memory", mime_type="application/json")
+    def management_memory(id: str) -> str:  # noqa: A002 - the URI template's name
+        return json.dumps(manage.memory_detail(id, tenant_config(load_context_config())))
+
+    @mcp.resource(views("overview"), name="tinycontext-overview", mime_type="application/json")
+    def management_overview(params: str) -> str:
+        return json.dumps(manage.overview_view(params, tenant_config(load_context_config())))
+
+    @mcp.resource(views("service"), name="tinycontext-service", mime_type="application/json")
+    def management_service(params: str) -> str:
+        return json.dumps(manage.service_view(params, load_context_config()))
+
+    _management_registered = True
+
+
 def main() -> None:
     configure_from_environment()
     try:
@@ -739,6 +788,14 @@ def _run_server() -> None:
         raise ValueError("hosted tenancy requires MCP_TRANSPORT=sse or streamable-http")
     if hosted_tenancy_enabled():
         load_hosted_tenancy_config()
+    from tinycontext.services.management_service import (
+        check_management_startup,
+        management_enabled,
+    )
+
+    check_management_startup(transport)
+    if management_enabled():
+        register_management_resources()
 
     config = load_context_config()
     if normalize_embedding_backend(str(config["embedding_backend"])) == "onnx":

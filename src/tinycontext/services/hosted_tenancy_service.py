@@ -121,7 +121,7 @@ def reset_hosted_user(token: contextvars.Token[str | None]) -> None:
     _current_user_id.reset(token)
 
 
-def _mcp_message_scope() -> Mapping[str, Any] | None:
+def mcp_message_scope() -> Mapping[str, Any] | None:
     """The ASGI scope of the HTTP request that carried the current MCP message.
 
     An MCP session's handler task is created by the request that opened the
@@ -151,7 +151,7 @@ def current_hosted_user() -> str | None:
     """
     if not hosted_tenancy_enabled():
         return None
-    scope = _mcp_message_scope()
+    scope = mcp_message_scope()
     if scope is not None:
         return resolve_hosted_user(scope)
     user_id = _current_user_id.get()
