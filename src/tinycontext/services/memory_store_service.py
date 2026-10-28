@@ -495,14 +495,15 @@ def _search_join(match_query: str | None) -> tuple[str, list[Any]]:
 
 _ORDER_CLAUSES = {
     # rowid makes equal-second and same-batch saves deterministic: the later
-    # inserted row is the newer one when timestamps tie.
-    "recent": " ORDER BY created_at DESC, rowid DESC",
+    # inserted row is the newer one when timestamps tie. Qualified, since the
+    # search join brings in memories_fts, which has a rowid of its own.
+    "recent": " ORDER BY created_at DESC, memories.rowid DESC",
     # Never-recalled rows (recall_count 0, last_recalled_at NULL) sort first
     # since SQLite orders NULL before any value in ASC order; among those,
     # the oldest surfaces first as the strongest prune/consolidate candidate.
-    "stale": " ORDER BY recall_count ASC, last_recalled_at ASC, created_at ASC, rowid ASC",
+    "stale": " ORDER BY recall_count ASC, last_recalled_at ASC, created_at ASC, memories.rowid ASC",
     # Best BM25 match first (FTS5's bm25 is lower-is-better); only with a search.
-    "relevance": " ORDER BY hits.hit_rank ASC, created_at DESC, rowid DESC",
+    "relevance": " ORDER BY hits.hit_rank ASC, created_at DESC, memories.rowid DESC",
 }
 
 
