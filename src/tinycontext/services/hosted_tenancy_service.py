@@ -121,12 +121,49 @@ def reset_hosted_user(token: contextvars.Token[str | None]) -> None:
     _current_user_id.reset(token)
 
 
-def tenant_config(base_config: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the per-user configuration for an authenticated hosted request."""
+def _mcp_message_scope() -> Mapping[str, Any] | None:
+    """The ASGI scope of the HTTP request that carried the current MCP message.
+
+    An MCP session's handler task is created by the request that opened the
+    session, so a contextvar bound by the ASGI middleware only ever reaches
+    tool handlers with *that first request's* user. Each message's own HTTP
+    request travels in the SDK's request context instead, which is what has
+    to decide the tenant: otherwise a client that reuses one session for
+    several users (a shared chat UI, a gateway) runs every user's calls in
+    the store of whoever connected first.
+    """
+    try:
+        from mcp.server.lowlevel.server import request_ctx
+    except ImportError:
+        return None
+    context = request_ctx.get(None)
+    request = getattr(context, "request", None) if context is not None else None
+    scope = getattr(request, "scope", None)
+    return scope if isinstance(scope, Mapping) else None
+
+
+def current_hosted_user() -> str | None:
+    """The verified user for the current call, or None outside hosted mode.
+
+    MCP messages are re-resolved from their own HTTP request (peer address
+    and identity header, every message); FastAPI requests use the identity
+    the middleware bound for that request.
+    """
+    if not hosted_tenancy_enabled():
+        return None
+    scope = _mcp_message_scope()
+    if scope is not None:
+        return resolve_hosted_user(scope)
     user_id = _current_user_id.get()
     if user_id is None:
-        if hosted_tenancy_enabled():
-            raise HostedTenancyError("hosted request has no authenticated user")
+        raise HostedTenancyError("hosted request has no authenticated user")
+    return user_id
+
+
+def tenant_config(base_config: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the per-user configuration for an authenticated hosted request."""
+    user_id = current_hosted_user()
+    if user_id is None:
         return dict(base_config)
     config = load_hosted_tenancy_config()
     digest = hmac.new(config.secret, user_id.encode("utf-8"), hashlib.sha256).hexdigest()

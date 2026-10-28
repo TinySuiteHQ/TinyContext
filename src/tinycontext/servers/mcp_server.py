@@ -101,8 +101,8 @@ def _route_identity(route: BaseRoute) -> tuple[Any, ...]:
     return ("other", type(route).__name__, id(route))
 
 
-async def _run_streamable_http_combined_async() -> None:
-    import uvicorn
+def _build_streamable_http_app() -> Any:
+    """Streamable HTTP on /mcp plus legacy SSE, behind the hosted identity boundary."""
     from starlette.applications import Starlette
 
     stream_app = mcp.streamable_http_app()
@@ -144,9 +144,14 @@ async def _run_streamable_http_combined_async() -> None:
         middleware=_streamable_http_cors_middleware() + stream_app.user_middleware,
         lifespan=stream_app.router.lifespan_context,
     )
-    app = HostedTenancyMiddleware(app)
+    return HostedTenancyMiddleware(app)
+
+
+async def _run_streamable_http_combined_async() -> None:
+    import uvicorn
+
     config = uvicorn.Config(
-        app,
+        _build_streamable_http_app(),
         host=mcp.settings.host,
         port=mcp.settings.port,
         log_level=mcp.settings.log_level.lower(),
