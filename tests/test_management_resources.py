@@ -195,17 +195,22 @@ class HostedManagementTests(_Base):
 class TokenManagementTests(_Base):
     env = {**HOSTED, "TINYCONTEXT_MANAGEMENT_TOKEN": TOKEN}
 
-    async def test_the_token_is_required_and_unlocks_the_service_view(self) -> None:
+    async def test_the_token_unlocks_the_service_view_and_is_not_needed_for_your_own(self) -> None:
+        service_uri = manage.VIEW_URI.format(view="service").format(params="-")
         with RunningMcpServer() as server:
+            # The proxy proved who alice is: her own views need no operator token.
             async with mcp_session(server.url, {HEADER: "alice"}) as session:
+                own = await _read(session, manage.MANIFEST_URI)
+                await _read(session, manage.VIEW_URI.format(view="memories").format(params="-"))
                 with self.assertRaises(Exception):
-                    await _read(session, manage.MANIFEST_URI)
+                    await _read(session, service_uri)
             async with mcp_session(server.url, {HEADER: "alice", "Authorization": "Bearer wrong" + TOKEN}) as session:
                 with self.assertRaises(Exception):
-                    await _read(session, manage.MANIFEST_URI)
+                    await _read(session, service_uri)
             async with mcp_session(server.url, {HEADER: "alice", "Authorization": f"Bearer {TOKEN}"}) as session:
                 manifest = await _read(session, manage.MANIFEST_URI)
-                service = await _read(session, manage.VIEW_URI.format(view="service").format(params="-"))
+                service = await _read(session, service_uri)
+        self.assertNotIn("service", [v["id"] for v in own["views"]])
         self.assertIn("service", [v["id"] for v in manifest["views"]])
         labels = {item["label"]: item["value"] for item in service["items"]}
         self.assertEqual(labels["Storage"], "one store per user (hosted)")

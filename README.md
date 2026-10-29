@@ -290,10 +290,12 @@ Every view shows only the caller's own store, under the same rules as the
 tools. Management is off by default. Over HTTP it also needs an authenticated
 caller, or the server refuses to start:
 
-- In hosted mode, the trusted proxy's identity opens the user views.
-- `TINYCONTEXT_MANAGEMENT_TOKEN` (24+ characters) requires
-  `Authorization: Bearer <token>` on every management read, and also opens the
-  Service view.
+- In hosted mode, the trusted proxy's identity opens each caller's own user
+  views, token or not: the proxy has already proven who they are.
+- `TINYCONTEXT_MANAGEMENT_TOKEN` (24+ characters), sent as
+  `Authorization: Bearer <token>`, opens the Service view, and outside hosted
+  mode every management read. It is the operator's, so a proxy can send it on
+  its own connection only and never on a user's.
 
 A local stdio client is the operator and sees every view.
 
@@ -733,7 +735,7 @@ Environment overrides:
 | `TINYCONTEXT_TRUSTED_PROXY_CIDRS` | Required direct proxy CIDR list in hosted mode |
 | `TINYCONTEXT_TRUSTED_PROXY_TOKEN` | Required in hosted mode (at least 32 bytes): the proxy sends it as `X-TinyContext-Proxy-Token` on every request |
 | `TINYCONTEXT_MANAGEMENT` | `on` to expose the management views (default `off`) |
-| `TINYCONTEXT_MANAGEMENT_TOKEN` | Bearer token for management reads over HTTP; also opens the Service view |
+| `TINYCONTEXT_MANAGEMENT_TOKEN` | Operator's bearer token: opens the Service view, and outside hosted mode every management read |
 
 An existing checkout-local database remains usable:
 

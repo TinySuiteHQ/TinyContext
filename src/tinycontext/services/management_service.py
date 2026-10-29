@@ -115,10 +115,12 @@ def _instance_allowed() -> bool:
 def authorize(view_scope: str) -> None:
     """Raise unless this call may read a view of the given scope.
 
-    A local stdio client is the operator. Over HTTP, a configured token must
-    be presented; without one, only hosted mode's per-user views are open,
-    since the trusted proxy already authenticated the caller and the views
-    only ever show that caller's own store.
+    A local stdio client is the operator. In hosted mode a caller's own
+    (user) views are open to them: the trusted proxy has already proven who
+    they are, on every message, and these views only ever show that caller's
+    own store. Everything else over HTTP -- the instance views, and any view
+    of a single shared store -- needs the management token, which belongs to
+    the operator, so a proxy can keep operator and user access apart.
     """
     if not management_enabled():
         raise ManagementAccessError("management views are disabled on this server")
@@ -127,11 +129,11 @@ def authorize(view_scope: str) -> None:
         return
     if scope is None:
         raise ManagementAccessError("management views need an HTTP request to authenticate")
+    if view_scope == "user" and hosted_tenancy_enabled():
+        return
     if management_token():
         if not _token_matches(scope):
             raise ManagementAccessError("management views need the management token")
-        return
-    if view_scope == "user" and hosted_tenancy_enabled():
         return
     raise ManagementAccessError("this management view is not available to this caller")
 
