@@ -13,6 +13,7 @@ from tinycontext.models import MemoryInput
 from tinycontext.servers.fastapi_server import app
 from tinycontext.servers.hosted_tenancy_middleware import HostedTenancyMiddleware
 from tinycontext.services.hosted_tenancy_service import (
+    PROXY_TOKEN_HEADER,
     HostedTenancyError,
     bind_hosted_user,
     load_hosted_tenancy_config,
@@ -22,6 +23,11 @@ from tinycontext.services.hosted_tenancy_service import (
 )
 from tinycontext.services.memory_store_service import close_connection
 from tests.embedding_fakes import start_fake_embeddings
+
+
+PROXY_TOKEN = "p" * 32
+# What the trusted proxy adds to every request it forwards.
+PROXY = {PROXY_TOKEN_HEADER: PROXY_TOKEN}
 
 
 class HostedTenancyTests(unittest.IsolatedAsyncioTestCase):
@@ -41,6 +47,7 @@ class HostedTenancyTests(unittest.IsolatedAsyncioTestCase):
             "TINYCONTEXT_TENANT_STORE_DIR": str(self.store_dir),
             "TINYCONTEXT_TENANT_SECRET": "a" * 32,
             "TINYCONTEXT_TRUSTED_PROXY_CIDRS": "127.0.0.0/8",
+            "TINYCONTEXT_TRUSTED_PROXY_TOKEN": PROXY_TOKEN,
         }
         self.environment = patch.dict(os.environ, self.env, clear=False)
         self.environment.start()
@@ -94,21 +101,37 @@ class HostedTenancyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row["content"] for row in result["memories"]], ["first project only"])
 
     def test_resolver_rejects_forged_or_invalid_requests(self) -> None:
-        valid_headers = [(b"x-tinycontext-user-id", b"alice")]
+        proxy = (PROXY_TOKEN_HEADER.lower().encode(), PROXY_TOKEN.encode())
+        alice = (b"x-tinycontext-user-id", b"alice")
+        valid_headers = [proxy, alice]
+        self.assertEqual(
+            resolve_hosted_user({"client": ("127.0.0.1", 123), "headers": valid_headers}),
+            "alice",
+        )
         with self.assertRaises(HostedTenancyError):
             resolve_hosted_user({"client": ("192.0.2.10", 123), "headers": valid_headers})
         with self.assertRaises(HostedTenancyError):
-            resolve_hosted_user({"client": ("127.0.0.1", 123), "headers": []})
+            resolve_hosted_user({"client": ("127.0.0.1", 123), "headers": [proxy]})
         with self.assertRaises(HostedTenancyError):
             resolve_hosted_user(
                 {
                     "client": ("127.0.0.1", 123),
-                    "headers": [
-                        (b"x-tinycontext-user-id", b"alice"),
-                        (b"x-tinycontext-user-id", b"bob"),
-                    ],
+                    "headers": [proxy, alice, (b"x-tinycontext-user-id", b"bob")],
                 }
             )
+        self.assertFalse(self.store_dir.exists())
+
+    def test_a_trusted_address_without_the_proxy_token_is_not_the_proxy(self) -> None:
+        alice = (b"x-tinycontext-user-id", b"alice")
+        token_header = PROXY_TOKEN_HEADER.lower().encode()
+        for headers in (
+            [alice],
+            [(token_header, b"q" * 32), alice],
+            [(token_header, PROXY_TOKEN[:-1].encode()), alice],
+            [(token_header, PROXY_TOKEN.encode()), (token_header, PROXY_TOKEN.encode()), alice],
+        ):
+            with self.assertRaisesRegex(HostedTenancyError, "trusted proxy"):
+                resolve_hosted_user({"client": ("127.0.0.1", 123), "headers": headers})
         self.assertFalse(self.store_dir.exists())
 
     async def test_fastapi_requires_proxy_identity_and_isolates_users(self) -> None:
@@ -122,22 +145,28 @@ class HostedTenancyTests(unittest.IsolatedAsyncioTestCase):
                     "/save_memories", json={"memories": [{"content": "must fail"}]}
                 )
                 self.assertEqual(denied.status_code, 401)
+                forged = await client.post(
+                    "/save_memories",
+                    headers={"X-TinyContext-User-Id": "alice"},
+                    json={"memories": [{"content": "must fail"}]},
+                )
+                self.assertEqual(forged.status_code, 401, "a user header without the proxy token")
 
                 for user, content in (("alice", "alice only"), ("bob", "bob only")):
                     response = await client.post(
                         "/save_memories",
-                        headers={"X-TinyContext-User-Id": user},
+                        headers={**PROXY, "X-TinyContext-User-Id": user},
                         json={"memories": [{"content": content}]},
                     )
                     self.assertEqual(response.status_code, 200)
                 response = await client.post(
                     "/recall_memories",
-                    headers={"X-TinyContext-User-Id": "alice"},
+                    headers={**PROXY, "X-TinyContext-User-Id": "alice"},
                     json={"query": "only"},
                 )
                 recent_response = await client.get(
                     "/recall_memories",
-                    headers={"X-TinyContext-User-Id": "alice"},
+                    headers={**PROXY, "X-TinyContext-User-Id": "alice"},
                 )
         self.assertEqual(
             [row["content"] for row in response.json()["memories"]], ["alice only"]
@@ -160,15 +189,24 @@ class HostedTenancyTests(unittest.IsolatedAsyncioTestCase):
             transport = httpx.ASGITransport(app=protected, client=("127.0.0.1", 4321))
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
                 denied = await client.get(path)
+                forged = await client.get(path, headers={"X-TinyContext-User-Id": "alice"})
                 allowed = await client.get(
-                    path, headers={"X-TinyContext-User-Id": "alice"}
+                    path, headers={**PROXY, "X-TinyContext-User-Id": "alice"}
                 )
             self.assertEqual(denied.status_code, 401)
+            self.assertEqual(forged.status_code, 401)
             self.assertEqual(allowed.status_code, 204)
         self.assertEqual(len(seen), 2)
         self.assertEqual(seen[0], seen[1])
 
     def test_invalid_hosted_configuration_fails_closed(self) -> None:
         with patch.dict(os.environ, {"TINYCONTEXT_TENANT_SECRET": "short"}):
+            with self.assertRaises(HostedTenancyError):
+                load_hosted_tenancy_config()
+        for token in ("", "short"):
+            with patch.dict(os.environ, {"TINYCONTEXT_TRUSTED_PROXY_TOKEN": token}):
+                with self.assertRaisesRegex(HostedTenancyError, "TINYCONTEXT_TRUSTED_PROXY_TOKEN"):
+                    load_hosted_tenancy_config()
+        with patch.dict(os.environ, {"TINYCONTEXT_TRUSTED_USER_HEADER": PROXY_TOKEN_HEADER}):
             with self.assertRaises(HostedTenancyError):
                 load_hosted_tenancy_config()

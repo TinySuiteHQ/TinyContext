@@ -14,8 +14,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import httpx
+
 from tests.embedding_fakes import start_fake_embeddings
 from tests.mcp_http_harness import RunningMcpServer, mcp_session
+from tinycontext.services.hosted_tenancy_service import PROXY_TOKEN_HEADER
 from tinycontext.services.memory_store_service import close_connection
 
 HEADER = "X-TinyContext-User-Id"
@@ -44,6 +47,7 @@ class HostedMcpSessionIdentityTests(unittest.IsolatedAsyncioTestCase):
                 "TINYCONTEXT_TENANT_STORE_DIR": str(self.store_dir),
                 "TINYCONTEXT_TENANT_SECRET": "s" * 32,
                 "TINYCONTEXT_TRUSTED_PROXY_CIDRS": "127.0.0.0/8",
+                "TINYCONTEXT_TRUSTED_PROXY_TOKEN": "p" * 32,
             },
         )
         environment.start()
@@ -97,6 +101,30 @@ class HostedMcpSessionIdentityTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("bob note", alice)
         self.assertIn("bob note 2", bob)
         self.assertNotIn("alice note", bob)
+
+    async def test_a_local_caller_without_the_proxy_token_cannot_name_a_user(self) -> None:
+        # The server trusts 127.0.0.0/8 here, so any local program can reach
+        # it: the address check alone would let it act as anyone.
+        initialize = {
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                       "clientInfo": {"name": "forger", "version": "0"}},
+        }
+        accept = {"Accept": "application/json, text/event-stream"}
+        with RunningMcpServer() as server:
+            async with httpx.AsyncClient(timeout=15) as client:
+                forged = await client.post(server.url, json=initialize, headers={**accept, HEADER: "alice"})
+                wrong = await client.post(
+                    server.url, json=initialize,
+                    headers={**accept, HEADER: "alice", PROXY_TOKEN_HEADER: "q" * 32},
+                )
+                proxied = await client.post(
+                    server.url, json=initialize,
+                    headers={**accept, HEADER: "alice", PROXY_TOKEN_HEADER: os.environ["TINYCONTEXT_TRUSTED_PROXY_TOKEN"]},
+                )
+        self.assertEqual([forged.status_code, wrong.status_code], [401, 401])
+        self.assertEqual(proxied.status_code, 200)
+        self.assertEqual(list(self.store_dir.glob("*.db")), [], "a refused caller opened no store")
 
 
 if __name__ == "__main__":

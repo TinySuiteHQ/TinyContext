@@ -239,6 +239,7 @@ use [`compose.hosted.yaml`](compose.hosted.yaml) behind a reverse proxy:
 ```bash
 export TINYCONTEXT_TENANT_SECRET="a-stable-secret-of-at-least-32-bytes"
 export TINYCONTEXT_TRUSTED_PROXY_CIDRS="172.20.0.0/16"
+export TINYCONTEXT_TRUSTED_PROXY_TOKEN="$(openssl rand -hex 32)"
 docker network create tinycontext-proxy
 docker compose -f compose.hosted.yaml up -d
 ```
@@ -249,6 +250,14 @@ container. It must authenticate the caller, strip any incoming
 user ID. Set `TINYCONTEXT_TRUSTED_PROXY_CIDRS` to the proxy's direct Docker or
 private-network CIDR. TinyContext rejects requests from other peers and never
 accepts a user ID in an MCP tool or API request body.
+
+The proxy also sends `X-TinyContext-Proxy-Token: <TINYCONTEXT_TRUSTED_PROXY_TOKEN>`
+on every request (at least 32 bytes; hosted mode refuses to start without it).
+The address alone does not prove a request came from the proxy: anything else
+that can send from that network, such as another container or a local program
+when TinyContext listens on loopback, could otherwise name any user. A request
+from a trusted address with a missing or wrong token is refused like one from
+an untrusted address. Keep the token as secret as the proxy's own credentials.
 
 Hosted tenancy stores each user in a separate SQLite file under
 `TINYCONTEXT_TENANT_STORE_DIR`; filenames are HMAC-derived and do not expose
@@ -716,6 +725,7 @@ Environment overrides:
 | `TINYCONTEXT_TENANT_STORE_DIR` | Required root directory for per-user SQLite files in hosted mode |
 | `TINYCONTEXT_TENANT_SECRET` | Required stable secret (at least 32 bytes) for opaque tenant filenames |
 | `TINYCONTEXT_TRUSTED_PROXY_CIDRS` | Required direct proxy CIDR list in hosted mode |
+| `TINYCONTEXT_TRUSTED_PROXY_TOKEN` | Required in hosted mode (at least 32 bytes): the proxy sends it as `X-TinyContext-Proxy-Token` on every request |
 | `TINYCONTEXT_MANAGEMENT` | `on` to expose the management views (default `off`) |
 | `TINYCONTEXT_MANAGEMENT_TOKEN` | Bearer token for management reads over HTTP; also opens the Service view |
 

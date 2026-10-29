@@ -1,7 +1,9 @@
 name: tinycontext-hosted
 
 # Attach this service to an already-authenticated reverse proxy. The proxy must
-# remove client-supplied X-TinyContext-User-Id and inject its verified value.
+# remove client-supplied X-TinyContext-User-Id and inject its verified value,
+# and send X-TinyContext-Proxy-Token: $TINYCONTEXT_TRUSTED_PROXY_TOKEN on every
+# request, so that nothing else on the network can pose as the proxy.
 services:
   tinycontext:
     image: marcellm01/tinycontext:latest
@@ -16,6 +18,7 @@ services:
       TINYCONTEXT_TENANT_STORE_DIR: /data/tenants
       TINYCONTEXT_TENANT_SECRET: ${TINYCONTEXT_TENANT_SECRET:?set a stable 32-byte secret}
       TINYCONTEXT_TRUSTED_PROXY_CIDRS: ${TINYCONTEXT_TRUSTED_PROXY_CIDRS:?set the proxy network CIDR}
+      TINYCONTEXT_TRUSTED_PROXY_TOKEN: ${TINYCONTEXT_TRUSTED_PROXY_TOKEN:?set the token the proxy sends (32+ bytes)}
       TINYCONTEXT_MODELS_DIR: /data/models
       MCP_TRANSPORT: streamable-http
       MCP_HOST: 0.0.0.0
@@ -38,6 +41,7 @@ services:
       TINYCONTEXT_TENANT_STORE_DIR: /data/tenants
       TINYCONTEXT_TENANT_SECRET: ${TINYCONTEXT_TENANT_SECRET:?set a stable 32-byte secret}
       TINYCONTEXT_TRUSTED_PROXY_CIDRS: ${TINYCONTEXT_TRUSTED_PROXY_CIDRS:?set the proxy network CIDR}
+      TINYCONTEXT_TRUSTED_PROXY_TOKEN: ${TINYCONTEXT_TRUSTED_PROXY_TOKEN:?set the token the proxy sends (32+ bytes)}
       TINYCONTEXT_MODELS_DIR: /data/models
     networks:
       - proxy

@@ -1,4 +1,10 @@
-"""Trusted-proxy tenant isolation for hosted HTTP adapters only."""
+"""Trusted-proxy tenant isolation for hosted HTTP adapters only.
+
+A request is believed to come from the proxy only when it arrives from a
+trusted address *and* carries the proxy's shared token. The address alone is
+not enough: anything else that can send from that network (another container,
+a local program on a loopback deployment) could otherwise name any user.
+"""
 
 from __future__ import annotations
 
@@ -16,6 +22,7 @@ from typing import Any
 
 _TENANCY_MODE = "proxy-header"
 _IDENTITY_RE = re.compile(r"^[^\x00-\x1f\x7f]{1,256}$")
+PROXY_TOKEN_HEADER = "X-TinyContext-Proxy-Token"
 
 
 class HostedTenancyError(ValueError):
@@ -28,6 +35,7 @@ class HostedTenancyConfig:
     store_dir: Path
     secret: bytes
     trusted_proxy_networks: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]
+    proxy_token: bytes
 
 
 _current_user_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -56,8 +64,18 @@ def load_hosted_tenancy_config() -> HostedTenancyConfig:
     store_dir_raw = os.environ.get("TINYCONTEXT_TENANT_STORE_DIR", "").strip()
     secret = os.environ.get("TINYCONTEXT_TENANT_SECRET", "").encode()
     networks_raw = os.environ.get("TINYCONTEXT_TRUSTED_PROXY_CIDRS", "").strip()
+    proxy_token = os.environ.get("TINYCONTEXT_TRUSTED_PROXY_TOKEN", "").strip().encode()
     if not header_name or not re.fullmatch(r"[A-Za-z0-9-]+", header_name):
         raise HostedTenancyError("TINYCONTEXT_TRUSTED_USER_HEADER is invalid")
+    if header_name.lower() == PROXY_TOKEN_HEADER.lower():
+        raise HostedTenancyError(
+            f"TINYCONTEXT_TRUSTED_USER_HEADER cannot be {PROXY_TOKEN_HEADER}"
+        )
+    if len(proxy_token) < 32:
+        raise HostedTenancyError(
+            "TINYCONTEXT_TRUSTED_PROXY_TOKEN must be at least 32 bytes: "
+            f"the proxy sends it as {PROXY_TOKEN_HEADER} on every request"
+        )
     if not store_dir_raw:
         raise HostedTenancyError("TINYCONTEXT_TENANT_STORE_DIR is required")
     if len(secret) < 32:
@@ -81,6 +99,7 @@ def load_hosted_tenancy_config() -> HostedTenancyConfig:
         store_dir=Path(store_dir_raw).expanduser().resolve(),
         secret=secret,
         trusted_proxy_networks=networks,
+        proxy_token=proxy_token,
     )
 
 
@@ -95,12 +114,16 @@ def resolve_hosted_user(scope: Mapping[str, Any]) -> str:
         raise HostedTenancyError("request did not come from a trusted proxy") from exc
     if not any(client_ip in network for network in config.trusted_proxy_networks):
         raise HostedTenancyError("request did not come from a trusted proxy")
-    header_key = config.header_name.lower().encode("ascii")
-    values = [
-        bytes(value)
-        for key, value in scope.get("headers", [])
-        if bytes(key).lower() == header_key
-    ]
+
+    def header(name: str) -> list[bytes]:
+        key = name.lower().encode("ascii")
+        return [bytes(v) for k, v in scope.get("headers", []) if bytes(k).lower() == key]
+
+    # Same answer as a wrong address: a caller learns nothing about which check failed.
+    tokens = header(PROXY_TOKEN_HEADER)
+    if len(tokens) != 1 or not hmac.compare_digest(tokens[0].strip(), config.proxy_token):
+        raise HostedTenancyError("request did not come from a trusted proxy")
+    values = header(config.header_name)
     if len(values) != 1:
         raise HostedTenancyError("trusted user identity is missing or invalid")
     raw_user_id = values[0]
