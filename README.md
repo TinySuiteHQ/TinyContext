@@ -670,6 +670,12 @@ The core defaults are:
 | `embedding_model` | `balanced` | `fast`, `balanced`, `quality`, or a Hugging Face repository |
 | `embedding_backend` | `onnx` | `onnx` (local) or `openai_compatible` |
 | `embedding_openai_env_file` | `.env` | Env file to read API credentials from for the openai_compatible backend |
+
+On macOS and Linux, memory databases (the single store, and each user's store
+in hosted mode) are created owner-only (`0600`), in a folder created `0700`;
+an older store left readable by others is tightened on open. A folder you
+point it at that already exists keeps its own permissions. On Windows the
+per-user `AppData` folder already keeps them private.
 | `embedding_batch_size` | `32` | Local ONNX inference batch size |
 | `recall_rrf_cutoff` | `0.0` | Minimum normalized hybrid RRF score; zero disables filtering |
 | `recall_dense_weight` | `0.5` | Dense contribution to weighted RRF |

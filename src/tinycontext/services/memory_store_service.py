@@ -10,6 +10,8 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any, Sequence
 
+from tinycontext.paths import private_file
+
 import sqlite_vec
 
 from tinycontext.models import MemoryRow
@@ -161,7 +163,8 @@ class _ConnectionPool:
         db_path = Path(os.path.normcase(os.path.normpath(str(db_path.expanduser()))))
         with self._guard:
             if db_path not in self._connections:
-                db_path.parent.mkdir(parents=True, exist_ok=True)
+                # Memories are personal: owner-only, like the user's own files.
+                private_file(db_path)
                 conn = sqlite3.connect(
                     db_path,
                     check_same_thread=False,
