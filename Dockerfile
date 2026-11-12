@@ -18,7 +18,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN apt-get update \
+# CI passes a fresh value (the workflow run id) so this OS-patching layer is
+# rebuilt on every publish instead of being reused from the GHA layer cache.
+ARG APT_REFRESH=local
+
+RUN echo "apt refresh: ${APT_REFRESH}" \
+    && apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates curl gosu \
     && rm -rf /var/lib/apt/lists/*

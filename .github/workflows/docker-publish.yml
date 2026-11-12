@@ -100,6 +100,7 @@ jobs:
           push: false
           build-args: |
             TINYCONTEXT_VERSION=${{ steps.version.outputs.value }}
+            APT_REFRESH=${{ github.run_id }}
           tags: ${{ env.IMAGE_NAME }}:scan
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -122,6 +123,7 @@ jobs:
           push: true
           build-args: |
             TINYCONTEXT_VERSION=${{ steps.version.outputs.value }}
+            APT_REFRESH=${{ github.run_id }}
           tags: ${{ steps.tags.outputs.value }}
           labels: |
             org.opencontainers.image.title=TinyContext MCP
