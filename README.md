@@ -25,6 +25,8 @@ Part of [TinySuite](https://tinysuite.dev). Comes built in to [TinyWebUI](https:
 ![MCP Server](https://img.shields.io/badge/MCP-server-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-supported-009688)
 
+<img src="assets/tinycontext-demo.webp" width="760" alt="TinyContext in about 30 seconds, live in TinyWebUI: facts saved as separate memories, recalled in a brand-new chat within the token budget, and a memory reviewed and edited on TinyContext's own page" />
+
 **[Read the documentation → tinysuite.dev/docs/tinycontext](https://tinysuite.dev/docs/tinycontext/)**
 
 </div>
